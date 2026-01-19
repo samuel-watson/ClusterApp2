@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cluster Trial Designer</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    
+    <!-- Babel for JSX transformation -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <style>
+      /* Loading overlay */
+      #loading-overlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(255, 255, 255, 0.9);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+        font-family: system-ui, -apple-system, sans-serif;
+      }
+      #loading-overlay.hidden {
+        display: none;
+      }
+      .spinner {
+        width: 40px;
+        height: 40px;
+        border: 4px solid #e2e8f0;
+        border-top-color: #3b82f6;
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loading-overlay">
+      <div class="spinner"></div>
+      <p style="margin-top: 16px; color: #64748b;">Loading application...</p>
+    </div>
+    
+    <div id="root"></div>
+    
+    <!-- WASM Module - this must be loaded before the app -->
+    <script src="glmm_wasm.js"></script>
+    
+    <!-- wasmLoader.js inline (since we can't use ES modules without bundler) -->
+    <script>
+      // wasmLoader.js - IIFE version for browser
+      (function(global) {
+        let wasmModule = null;
+        let isLoading = false;
+        let loadPromise = null;
+
+        // Estimator type mapping (matches C++ enum)
+        const EstimatorType = {
+          mixed_model: 0,
+          mixed_model_ttest: 1,
+          satterthwaite: 2,
+          kenward_roger: 3,
+          gee_independence: 4,
+          gee_independence_robust: 5
+        };
+
+        // Load the WASM module
+        async function loadWasm() {
+          if (wasmModule) return wasmModule;
+          if (loadPromise) return loadPromise;
+          
+          isLoading = true;
+          
+          loadPromise = new Promise(async (resolve, reject) => {
+            try {
+              // The script should already be loaded, createGLMMModule should exist
+              if (typeof createGLMMModule === 'undefined') {
+                throw new Error('WASM module factory not found. Make sure glmm_wasm.js is loaded.');
+              }
+              
+              wasmModule = await createGLMMModule({
+                // locateFile: (path) => path
+              });
+              
+              isLoading = false;
+              console.log('GLMM WASM module loaded successfully');
+              resolve(wasmModule);
+            } catch (err) {
+              isLoading = false;
+              reject(err);
+            }
+          });
+          
+          return loadPromise;
+        }
+
+        // Check if module is loaded
+        function isWasmLoaded() {
+          return wasmModule !== null;
+        }
+
+        // Get the raw module
+        function getModule() {
+          return wasmModule;
+        }
+
+        // Create a new GLMM wrapper instance
+        function createWrapper() {
+          if (!wasmModule) {
+            throw new Error('WASM module not loaded. Call loadWasm() first.');
+          }
+          return new wasmModule.GLMMWrapper();
+        }
+
+        // Convert JS array to WASM vector
+        function toWasmVector(arr) {
+          if (!wasmModule) {
+            throw new Error('WASM module not loaded');
+          }
+          const vec = new wasmModule.VectorDouble();
+          arr.forEach(v => vec.push_back(v));
+          return vec;
+        }
+
+        // Convert WASM vector to JS array
+        function fromWasmVector(vec) {
+          const arr = [];
+          for (let i = 0; i < vec.size(); i++) {
+            arr.push(vec.get(i));
+          }
+          return arr;
+        }
+
+        // Expose to global
+        global.WasmLoader = {
+          loadWasm,
+          isWasmLoaded,
+          getModule,
+          createWrapper,
+          toWasmVector,
+          fromWasmVector,
+          EstimatorType
+        };
+      })(window);
+    </script>
+    
+    <!-- App code - loaded from external file or inline -->
+    <script type="text/babel" data-type="module">
+      const { useState, useCallback, useRef, useEffect, useMemo } = React;
+      
+      // Import from global WasmLoader
+      const { 
+        loadWasm, 
+        isWasmLoaded, 
+        createWrapper, 
+        toWasmVector, 
+        fromWasmVector,
+        EstimatorType 
+      } = window.WasmLoader;
+
+      // === PASTE YOUR App.jsx CODE HERE ===
+      // (Remove any import/export statements)
+      // Make sure CellStatus is defined before MathsInterface
+      // Make sure MathsInterface uses the WasmLoader functions above
+      
+      // Example minimal test to verify WASM loads:
+      
+      const CellStatus = {
+        CONTROL: 'control',
+        INTERVENTION: 'intervention',
+        WASHOUT: 'washout',
+        NOT_ENROLLED: 'not_enrolled'
+      };
+
+      let wasmReady = false;
+
+      const MathsInterface = {
+        _modelCache: new Map(),
+        _colnames: ['cl', 't', 'n', 'int', 'int2', 'int12', 'control'],
+
+        async initialize() {
+          if (wasmReady) return true;
+          try {
+            await loadWasm();
+            wasmReady = true;
+            console.log('MathsInterface: WASM initialized');
+            return true;
+          } catch (err) {
+            console.error('MathsInterface: Failed to initialize WASM:', err);
+            return false;
+          }
+        },
+
+        isReady() {
+          return wasmReady;
+        },
+
+        // Add the rest of MathsInterface methods here...
+        // For now, a simple test stub:
+        calculateResults(design, options, designId = 'default') {
+          return {
+            power: '0.800',
+            dof: 20,
+            se: '0.1234',
+            mde: '0.4567',
+            ciWidth: '0.2345',
+            error: null
+          };
+        },
+
+        calculateOptimalWeights(design, options = {}) {
+          return [[1, 0.8], [0.8, 1]];
+        }
+      };
+
+      // Simple test app
+      function App() {
+        const [wasmLoaded, setWasmLoaded] = useState(false);
+        const [wasmError, setWasmError] = useState(null);
+        const [testResult, setTestResult] = useState(null);
+
+        useEffect(() => {
+          MathsInterface.initialize()
+            .then(success => {
+              setWasmLoaded(success);
+              if (!success) {
+                setWasmError('Failed to initialize WASM');
+              }
+            })
+            .catch(err => {
+              setWasmError(err.message);
+            });
+        }, []);
+
+        useEffect(() => {
+          // Hide loading overlay
+          const overlay = document.getElementById('loading-overlay');
+          if (overlay) overlay.classList.add('hidden');
+        }, []);
+
+        const runTest = () => {
+          if (!MathsInterface.isReady()) {
+            setTestResult({ error: 'WASM not ready' });
+            return;
+          }
+
+          try {
+            const wrapper = createWrapper();
+            
+            // Simple test data: 2 clusters, 2 periods
+            const dataMatrix = [
+              [1, 1, 20, 0, 0, 0, 1],  // cluster 1, period 1, control
+              [1, 2, 20, 1, 0, 0, 0],  // cluster 1, period 2, intervention
+              [2, 1, 20, 1, 0, 0, 0],  // cluster 2, period 1, intervention
+              [2, 2, 20, 0, 0, 0, 1],  // cluster 2, period 2, control
+            ];
+            
+            const flatData = dataMatrix.flat();
+            const wasmData = toWasmVector(flatData);
+            
+            const formula = 'int+factor(t)+(1|gr(cl))';
+            const success = wrapper.initialize(formula, wasmData, 4, 7, 'gaussian', 'identity');
+            
+            wasmData.delete();
+            
+            if (success) {
+              wrapper.setTreatmentEffect(0.5);
+              wrapper.setAlpha(0.05);
+              wrapper.setTargetPower(0.80);
+              wrapper.updateParameters(0.05, 0.0, 0.8, 0.5, 0.0, 20);
+              
+              const result = wrapper.calculatePower(0); // mixed_model
+              
+              setTestResult({
+                success: true,
+                formula: wrapper.getFormula(),
+                totalN: wrapper.getTotalN(),
+                nClusters: wrapper.getNClusters(),
+                power: result.power,
+                dof: result.dof,
+                se: result.se,
+                mde: result.mde,
+                valid: result.valid,
+                error: result.error
+              });
+              
+              wrapper.delete();
+            } else {
+              setTestResult({
+                success: false,
+                error: wrapper.getLastError()
+              });
+              wrapper.delete();
+            }
+          } catch (err) {
+            setTestResult({
+              success: false,
+              error: err.message
+            });
+          }
+        };
+
+        return (
+          <div className="min-h-screen bg-slate-100 p-8">
+            <div className="max-w-2xl mx-auto">
+              <h1 className="text-2xl font-bold text-slate-800 mb-6">
+                WASM Integration Test
+              </h1>
+              
+              <div className="bg-white rounded-lg shadow p-6 mb-6">
+                <h2 className="text-lg font-semibold mb-4">Status</h2>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className={`w-3 h-3 rounded-full ${wasmLoaded ? 'bg-green-500' : 'bg-yellow-500'}`}></span>
+                    <span>WASM Module: {wasmLoaded ? 'Loaded' : 'Loading...'}</span>
+                  </div>
+                  {wasmError && (
+                    <div className="text-red-600 text-sm">{wasmError}</div>
+                  )}
+                </div>
+              </div>
+              
+              <div className="bg-white rounded-lg shadow p-6 mb-6">
+                <h2 className="text-lg font-semibold mb-4">Test WASM Functions</h2>
+                <button
+                  onClick={runTest}
+                  disabled={!wasmLoaded}
+                  className="px-4 py-2 bg-blue-600 text-white rounded-lg disabled:opacity-50 disabled:cursor-not-allowed hover:bg-blue-700 transition-colors"
+                >
+                  Run Test
+                </button>
+                
+                {testResult && (
+                  <div className="mt-4 p-4 bg-slate-50 rounded-lg">
+                    <h3 className="font-medium mb-2">
+                      {testResult.success ? '✓ Test Passed' : '✗ Test Failed'}
+                    </h3>
+                    <pre className="text-sm text-slate-600 overflow-auto">
+                      {JSON.stringify(testResult, null, 2)}
+                    </pre>
+                  </div>
+                )}
+              </div>
+              
+              <div className="text-sm text-slate-500">
+                <p>This page tests that the WASM module loads and calculates correctly.</p>
+                <p className="mt-2">Files required in same directory:</p>
+                <ul className="list-disc list-inside mt-1">
+                  <li>glmm_wasm.js</li>
+                  <li>glmm_wasm.wasm</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      // Render
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>

@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Background -->
+  <rect width="32" height="32" rx="4" fill="#1e293b"/>
+  
+  <!-- Grid representing stepped-wedge design -->
+  <!-- Row 1: C C C C I -->
+  <rect x="3" y="4" width="4" height="4" rx="1" fill="#94a3b8"/>
+  <rect x="8" y="4" width="4" height="4" rx="1" fill="#94a3b8"/>
+  <rect x="13" y="4" width="4" height="4" rx="1" fill="#94a3b8"/>
+  <rect x="18" y="4" width="4" height="4" rx="1" fill="#94a3b8"/>
+  <rect x="23" y="4" width="4" height="4" rx="1" fill="#3b82f6"/>
+  
+  <!-- Row 2: C C C I I -->
+  <rect x="3" y="9" width="4" height="4" rx="1" fill="#94a3b8"/>
+  <rect x="8" y="9" width="4" height="4" rx="1" fill="#94a3b8"/>
+  <rect x="13" y="9" width="4" height="4" rx="1" fill="#94a3b8"/>
+  <rect x="18" y="9" width="4" height="4" rx="1" fill="#3b82f6"/>
+  <rect x="23" y="9" width="4" height="4" rx="1" fill="#3b82f6"/>
+  
+  <!-- Row 3: C C I I I -->
+  <rect x="3" y="14" width="4" height="4" rx="1" fill="#94a3b8"/>
+  <rect x="8" y="14" width="4" height="4" rx="1" fill="#94a3b8"/>
+  <rect x="13" y="14" width="4" height="4" rx="1" fill="#3b82f6"/>
+  <rect x="18" y="14" width="4" height="4" rx="1" fill="#3b82f6"/>
+  <rect x="23" y="14" width="4" height="4" rx="1" fill="#3b82f6"/>
+  
+  <!-- Row 4: C I I I I -->
+  <rect x="3" y="19" width="4" height="4" rx="1" fill="#94a3b8"/>
+  <rect x="8" y="19" width="4" height="4" rx="1" fill="#3b82f6"/>
+  <rect x="13" y="19" width="4" height="4" rx="1" fill="#3b82f6"/>
+  <rect x="18" y="19" width="4" height="4" rx="1" fill="#3b82f6"/>
+  <rect x="23" y="19" width="4" height="4" rx="1" fill="#3b82f6"/>
+  
+  <!-- Row 5: I I I I I -->
+  <rect x="3" y="24" width="4" height="4" rx="1" fill="#3b82f6"/>
+  <rect x="8" y="24" width="4" height="4" rx="1" fill="#3b82f6"/>
+  <rect x="13" y="24" width="4" height="4" rx="1" fill="#3b82f6"/>
+  <rect x="18" y="24" width="4" height="4" rx="1" fill="#3b82f6"/>
+  <rect x="23" y="24" width="4" height="4" rx="1" fill="#3b82f6"/>
+</svg>
