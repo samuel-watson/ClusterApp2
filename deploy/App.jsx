@@ -1183,11 +1183,12 @@ const createDefaultOptions = () => ({
   twoTreatments: false
 });
 
-const createDesignEntry = (name, preset = "stepped-wedge") => {
+const createDesignEntry = (name, preset = "parallel") => {
   let design;
   switch (preset) {
     case "parallel":
       design = TrialDesign.createParallel(2, 1);
+      design._clustersPerSequence = design._clustersPerSequence.map(() => 10);
       break;
     case "parallel-baseline":
       design = TrialDesign.createParallelBaseline(2, 2);
@@ -1554,6 +1555,60 @@ const ResultsTable = ({
           ⚠ Results are outdated. Click Recalculate to update.
         </p>
       )}
+    </div>
+  );
+};
+
+// Power Warning Component
+const PowerWarning = ({ warning, selectedEstimator, designName }) => {
+  if (!warning) return null;
+  
+  const estimatorLabels = {
+    mixed_model: 'Mixed Model',
+    mixed_model_ttest: 'Mixed Model t-test',
+    satterthwaite: 'Satterthwaite',
+    kenward_roger: 'Kenward-Roger',
+    gee_independence: 'GEE Independence',
+    gee_independence_robust: 'GEE Independence Robust',
+  };
+  
+  const isRobust = selectedEstimator.includes('robust') || selectedEstimator === 'gee_independence_robust';
+  const isSmallSampleCorrected = ['satterthwaite', 'kenward_roger', 'mixed_model_ttest'].includes(selectedEstimator);
+  
+  return (
+    <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 text-sm">
+      <div className="flex items-start gap-2">
+        <span className="text-amber-600 text-lg">⚠️</span>
+        <div className="flex-1">
+          <p className="font-medium text-amber-800 mb-2">
+            Power estimate may be optimistic
+          </p>
+          <p className="text-amber-700 mb-2">
+            The selected estimator for {designName} ({estimatorLabels[selectedEstimator]}) shows power of{' '}
+            <span className="font-mono font-semibold">{(warning.selectedPower * 100).toFixed(1)}%</span>, 
+            which is more than 10 percentage points higher than{' '}
+            {warning.lowEstimators.length === 1 
+              ? estimatorLabels[warning.lowEstimators[0].key]
+              : `${warning.lowEstimators.length} other estimators`
+            }{' '}
+            (lowest: <span className="font-mono font-semibold">{(warning.minOtherPower * 100).toFixed(1)}%</span>).
+          </p>
+          <p className="text-amber-700">
+            {!isSmallSampleCorrected && !isRobust && (
+              <>Consider using a small sample correction (Satterthwaite or Kenward-Roger) or robust covariance estimation (GEE Independence Robust) for more conservative estimates.</>
+            )}
+            {isSmallSampleCorrected && !isRobust && (
+              <>You are using a small sample correction. Consider also comparing with robust covariance estimation (GEE Independence Robust).</>
+            )}
+            {isRobust && !isSmallSampleCorrected && (
+              <>You are using robust covariance estimation. Consider also comparing with small sample corrections (Satterthwaite or Kenward-Roger).</>
+            )}
+            {isRobust && isSmallSampleCorrected && (
+              <>This estimator already includes corrections. The difference may reflect genuine variation in power across inference approaches for this design.</>
+            )}
+          </p>
+        </div>
+      </div>
     </div>
   );
 };
@@ -2044,6 +2099,8 @@ const currentXConfig = useMemo(() => {
   );
 };
 
+
+
 // === MAIN COMPONENT ===
 
 function App() {
@@ -2069,6 +2126,59 @@ function App() {
   const options = activeDesign.options;
 
   const weights = showWeights ? cachedWeights[activeIndex] || null : null;
+  // List of all estimators for comparison
+const ESTIMATORS = [
+  { key: 'mixed_model', label: 'Mixed Model' },
+  { key: 'mixed_model_ttest', label: 'Mixed Model t-test' },
+  { key: 'satterthwaite', label: 'Satterthwaite' },
+  { key: 'kenward_roger', label: 'Kenward-Roger' },
+  { key: 'gee_independence', label: 'GEE Independence' },
+  { key: 'gee_independence_robust', label: 'GEE Independence Robust' },
+];
+
+// Memoized power comparison across estimators
+const powerWarning = useMemo(() => {
+  if (!wasmLoaded || resultsStale || isCalculating) return null;
+  
+  const currentResult = cachedResults[activeIndex];
+  const currentPower = parseFloat(currentResult?.power);
+  if (isNaN(currentPower)) return null;
+  
+  const currentEstimator = options.estimator;
+  const d = designs[activeIndex];
+  
+  // Calculate power for all other estimators
+  const otherPowers = ESTIMATORS
+    .filter(e => e.key !== currentEstimator)
+    .map(e => {
+      const modifiedOptions = { ...d.options, estimator: e.key };
+      const result = MathsInterface.calculateResults(d.design, modifiedOptions, `_compare_${e.key}`);
+      return {
+        ...e,
+        power: parseFloat(result.power)
+      };
+    })
+    .filter(e => !isNaN(e.power));
+  
+  if (otherPowers.length === 0) return null;
+  
+  // Find the maximum difference where current is higher
+  const maxDiff = Math.max(...otherPowers.map(e => currentPower - e.power));
+  const minOtherPower = Math.min(...otherPowers.map(e => e.power));
+  const lowEstimators = otherPowers.filter(e => currentPower - e.power >= 0.10);
+  
+  if (maxDiff >= 0.10) {
+    return {
+      selectedPower: currentPower,
+      minOtherPower,
+      difference: maxDiff,
+      lowEstimators
+    };
+  }
+  
+  return null;
+}, [wasmLoaded, resultsStale, isCalculating, cachedResults, activeIndex, options.estimator, designs]);
+
 
   useEffect(() => {
   MathsInterface.initialize().then(success => {
@@ -2101,6 +2211,7 @@ function App() {
     MathsInterface.calculateOptimalWeights(d.design, d.options)
   );
 
+  
   setCachedResults(newResults);
   setCachedWeights(newWeights);
   setCacheVersion((v) => v + 1);
@@ -3040,6 +3151,11 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
               isCalculating={isCalculating}
               onRecalculate={recalculateResults}
             />
+  <PowerWarning 
+  warning={powerWarning} 
+  selectedEstimator={options.estimator}
+  designName={activeDesign.name}
+/>        
             <PlotArea
               designs={designs}
               activeIndex={activeIndex}
