@@ -154,6 +154,7 @@ if(EMSCRIPTEN)
     target_compile_options(glmm_wasm PRIVATE
         -O3
         -fexceptions  # Enable exceptions (needed for glmmr)
+        -msimd128
     )
     
     # Emscripten link flags

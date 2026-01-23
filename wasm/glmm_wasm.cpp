@@ -322,11 +322,34 @@ bool updateParameters(double icc, double iac, double cac_or_lengthscale,
     void setTargetPower(double p) { target_power = p; }
     void setTreatmentEffect(double te) { treatment_effect = te; }
     void setIncludeIntercept(bool inc) { include_intercept = inc; }
+
+    Eigen::MatrixXd applyCVCorrection(const Eigen::MatrixXd& Minv, double cv) {
+    if (cv <= 0) return Minv;
+    
+    Eigen::MatrixXd X = model->model.linear_predictor.X();
+    Eigen::MatrixXd Sigma = model->matrix.Sigma();
+    Eigen::VectorXd W_diag = model->matrix.W.W();
+    
+    double cv2 = cv * cv;
+    
+    // Bias correction: E[Σ_ii] ≈ Σ̄_ii + cv² / W_ii
+    // This accounts for E[1/n] > 1/E[n]
+    Eigen::VectorXd Sigma_correction = cv2 * W_diag.array().inverse();
+    Eigen::MatrixXd Sigma_adj = Sigma;
+    Sigma_adj.diagonal() += Sigma_correction;
+    
+    // Recompute M with adjusted Sigma
+    Eigen::LLT<Eigen::MatrixXd> llt_adj(Sigma_adj);
+    Eigen::MatrixXd M_adj = X.transpose() * llt_adj.solve(X);
+    Eigen::MatrixXd M_adj_inv = M_adj.llt().solve(Eigen::MatrixXd::Identity(M_adj.rows(), M_adj.cols()));
+    
+    return M_adj_inv;
+}
     
     // Calculate power - main analysis function
     // Returns AnalysisResult structure
     // Calculate power - main analysis function
-AnalysisResult calculatePower(int estimator_type) {
+AnalysisResult calculatePower(int estimator_type, double cv = 0.0) {
     AnalysisResult result;
     result.power = 0;
     result.dof = 0;
@@ -356,7 +379,8 @@ AnalysisResult calculatePower(int estimator_type) {
             // GLS with normal distribution
             Eigen::MatrixXd M = model->matrix.information_matrix();
             Eigen::MatrixXd Minv = M.llt().solve(Eigen::MatrixXd::Identity(M.rows(), M.cols()));
-            
+            Minv = applyCVCorrection(Minv, cv);
+
             double bvar = Minv(idx, idx);
             if (std::isnan(bvar) || bvar <= 0) {
                 result.error = "Invalid variance estimate";
@@ -375,7 +399,7 @@ AnalysisResult calculatePower(int estimator_type) {
             // BW with t-distribution
             Eigen::MatrixXd M = model->matrix.information_matrix();
             Eigen::MatrixXd Minv = M.llt().solve(Eigen::MatrixXd::Identity(M.rows(), M.cols()));
-            
+            Minv = applyCVCorrection(Minv, cv);
             double bvar = Minv(idx, idx);
             if (std::isnan(bvar) || bvar <= 0) {
                 result.error = "Invalid variance estimate";
@@ -413,7 +437,7 @@ AnalysisResult calculatePower(int estimator_type) {
             // Use GLS standard errors
             Eigen::MatrixXd M = model->matrix.information_matrix();
             Eigen::MatrixXd Minv = M.llt().solve(Eigen::MatrixXd::Identity(M.rows(), M.cols()));
-            
+            Minv = applyCVCorrection(Minv, cv);
             double bvar = Minv(idx, idx);
             if (std::isnan(bvar) || bvar <= 0) {
                 result.error = "Invalid variance estimate";
@@ -435,17 +459,21 @@ AnalysisResult calculatePower(int estimator_type) {
         else if (est == Estimator::KenwardRoger) {
             // Kenward-Roger: KR degrees of freedom and KR adjusted standard errors
             double dofkr;
-            double bvar;
+            Eigen::MatrixXd KRcov;
             
             if (correlation_structure != "exchangeable" && correlation_structure != "nested_exchangeable") {
                 auto res = model->matrix.template small_sample_correction<glmmr::SE::KRBoth, glmmr::IM::EIM>();
                 dofkr = res.dof(idx) > 1 ? res.dof(idx) : 1.0;
-                bvar = res.vcov_beta(idx, idx);
+                KRcov = res.vcov_beta;
             } else {
                 auto res = model->matrix.template small_sample_correction<glmmr::SE::KR, glmmr::IM::EIM>();
                 dofkr = res.dof(idx) > 1 ? res.dof(idx) : 1.0;
-                bvar = res.vcov_beta(idx, idx);
+                KRcov = res.vcov_beta;
             }
+            
+            KRcov = applyCVCorrection(KRcov, cv);
+            
+            double bvar = KRcov(idx, idx);
             
             if (std::isnan(bvar) || bvar <= 0) {
                 result.error = "Invalid variance estimate";
@@ -468,7 +496,7 @@ AnalysisResult calculatePower(int estimator_type) {
             // GEE with independence working correlation (model-based SE)
             Eigen::MatrixXd M = model->matrix.information_matrix();
             Eigen::MatrixXd Minv = M.llt().solve(Eigen::MatrixXd::Identity(M.rows(), M.cols()));
-            
+            Minv = applyCVCorrection(Minv, cv);
             double bvar = Minv(idx, idx);
             if (std::isnan(bvar) || bvar <= 0) {
                 result.error = "Invalid variance estimate";
@@ -485,6 +513,10 @@ AnalysisResult calculatePower(int estimator_type) {
         }
         else if (est == Estimator::GEEIndependenceRobust) {
             // GEE with robust/sandwich standard errors
+            if (cv > 0) {
+                result.error = "CV adjustment not available for robust standard errors";
+                return result;
+            }
             Eigen::MatrixXd X = model->model.linear_predictor.X();
             Eigen::MatrixXd Sigma = model->matrix.Sigma();
             

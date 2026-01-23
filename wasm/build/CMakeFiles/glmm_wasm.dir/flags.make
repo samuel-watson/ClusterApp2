@@ -6,5 +6,5 @@ CXX_DEFINES =
 
 CXX_INCLUDES = @CMakeFiles/glmm_wasm.dir/includes_CXX.rsp
 
-CXX_FLAGS = -O3 -DNDEBUG -std=gnu++17 -O3 -fexceptions
+CXX_FLAGS = -O3 -DNDEBUG -std=gnu++17 -O3 -fexceptions -msimd128
 

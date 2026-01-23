@@ -153,24 +153,24 @@ updateWeights(meanClusterSize) {
       if (includeIntercept !== undefined) this.wrapper.setIncludeIntercept(includeIntercept);
     }
     
-    calculatePower(estimator = 'mixed_model') {
-      if (!this.wrapper || !this.isInitialized) {
-        throw new Error('Model not initialized');
-      }
-      const estimatorCode = typeof estimator === 'string' 
-        ? (EstimatorType[estimator] ?? 0)
-        : estimator;
-      const result = this.wrapper.calculatePower(estimatorCode);
-      return {
-        power: result.power,
-        dof: result.dof,
-        se: result.se,
-        mde: result.mde,
-        ci_width: result.ci_width,
-        valid: result.valid,
-        error: result.error
-      };
-    }
+    calculatePower(estimator = 'mixed_model', cv = 0.0) {
+  if (!this.wrapper || !this.isInitialized) {
+    throw new Error('Model not initialized');
+  }
+  const estimatorCode = typeof estimator === 'string' 
+    ? (EstimatorType[estimator] ?? 0)
+    : estimator;
+  const result = this.wrapper.calculatePower(estimatorCode, cv);
+  return {
+    power: result.power,
+    dof: result.dof,
+    se: result.se,
+    mde: result.mde,
+    ci_width: result.ci_width,
+    valid: result.valid,
+    error: result.error
+  };
+}
     
     calculateOptimalWeights(N = 100) {
       if (!this.wrapper || !this.isInitialized) {

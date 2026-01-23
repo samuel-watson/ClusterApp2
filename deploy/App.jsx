@@ -896,7 +896,8 @@ _transformToLinkScale(baseline, treatmentEffect, outcomeType) {
   const estimatorCode = this._getEstimatorCode(options.estimator);
   console.log('estimatorCode:', estimatorCode);
   
-  const result = wrapper.calculatePower(estimatorCode);
+  const cv = options.sampleSizeMode === 'exact' ? 0 : (options.cvClusterSize ?? 0);
+const result = wrapper.calculatePower(estimatorCode, cv);
   console.log('calculatePower returned:', result);
       
       if (!result.valid) {
@@ -1564,8 +1565,8 @@ const PowerWarning = ({ warning, selectedEstimator, designName }) => {
   if (!warning) return null;
   
   const estimatorLabels = {
-    mixed_model: 'Mixed Model',
-    mixed_model_ttest: 'Mixed Model t-test',
+    mixed_model: 'Model-based',
+    mixed_model_ttest: 'Model-based t-test',
     satterthwaite: 'Satterthwaite',
     kenward_roger: 'Kenward-Roger',
     gee_independence: 'GEE Independence',
@@ -2887,13 +2888,12 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
                       className="px-2 py-1 text-sm border border-slate-300 rounded
                focus:outline-none focus:ring-1 focus:ring-blue-500"
                     >
-                      <option value="mixed_model">Mixed Model</option>
+                      <option value="mixed_model">Model-based</option>
                       <option value="mixed_model_ttest">
-                        Mixed Model t-test
+                        Model-based, t-test
                       </option>
                       <option value="satterthwaite">Satterthwaite</option>
                       <option value="kenward_roger">Kenward-Roger</option>
-                      <option value="gee_independence">GEE Independence</option>
                       <option value="gee_independence_robust">
                         GEE Independence Robust
                       </option>
@@ -3087,7 +3087,7 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
                     />
                   </div>
 
-                  {options.sampleSizeMode === "fixed" && (
+                  {options.sampleSizeMode !== "exact" && (
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-slate-500">
                         CV of Sizes
