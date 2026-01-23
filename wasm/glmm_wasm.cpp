@@ -512,34 +512,38 @@ AnalysisResult calculatePower(int estimator_type, double cv = 0.0) {
             result.mde = (zcutoff + powercutoff) * result.se;
         }
         else if (est == Estimator::GEEIndependenceRobust) {
-            // GEE with robust/sandwich standard errors
-            if (cv > 0) {
-                result.error = "CV adjustment not available for robust standard errors";
-                return result;
-            }
-            Eigen::MatrixXd X = model->model.linear_predictor.X();
-            Eigen::MatrixXd Sigma = model->matrix.Sigma();
-            
-            Eigen::MatrixXd XtX1 = X.transpose() * X;
-            Eigen::MatrixXd XtX2 = X.transpose() * Sigma * X;
-            
-            XtX1 = XtX1.llt().solve(Eigen::MatrixXd::Identity(XtX1.rows(), XtX1.cols()));
-            Eigen::MatrixXd XtX = XtX1 * XtX2 * XtX1;
-            
-            double bvar = XtX(idx, idx);
-            if (std::isnan(bvar) || bvar <= 0) {
-                result.error = "Invalid variance estimate";
-                return result;
-            }
-            
-            result.se = std::sqrt(bvar);
-            double zval = std::abs(treatment_effect / result.se);
-            
-            result.power = boost::math::cdf(norm, zval - zcutoff);
-            result.dof = getTotalN();
-            result.ci_width = zcutoff * result.se;
-            result.mde = (zcutoff + powercutoff) * result.se;
-        }
+    // GEE with robust/sandwich standard errors
+    Eigen::MatrixXd X = model->model.linear_predictor.X();
+    Eigen::MatrixXd Sigma = model->matrix.Sigma();
+    
+    // Apply CV correction to Sigma diagonal
+    if (cv > 0) {
+        Eigen::VectorXd W_diag = model->matrix.W.W();
+        double cv2 = cv * cv;
+        Eigen::VectorXd Sigma_correction = cv2 * W_diag.array().inverse();
+        Sigma.diagonal() += Sigma_correction;
+    }
+    
+    Eigen::MatrixXd XtX1 = X.transpose() * X;
+    Eigen::MatrixXd XtX2 = X.transpose() * Sigma * X;
+    
+    XtX1 = XtX1.llt().solve(Eigen::MatrixXd::Identity(XtX1.rows(), XtX1.cols()));
+    Eigen::MatrixXd XtX = XtX1 * XtX2 * XtX1;
+    
+    double bvar = XtX(idx, idx);
+    if (std::isnan(bvar) || bvar <= 0) {
+        result.error = "Invalid variance estimate";
+        return result;
+    }
+    
+    result.se = std::sqrt(bvar);
+    double zval = std::abs(treatment_effect / result.se);
+    
+    result.power = boost::math::cdf(norm, zval - zcutoff);
+    result.dof = getTotalN();
+    result.ci_width = zcutoff * result.se;
+    result.mde = (zcutoff + powercutoff) * result.se;
+}
         else {
             result.error = "Unknown estimator type";
             return result;
