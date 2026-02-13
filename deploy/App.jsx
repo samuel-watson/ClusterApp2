@@ -539,7 +539,7 @@ const MathsInterface = {
   const clusters = design._clustersPerSequence.join(',');
   const totalClusters = design._clustersPerSequence.reduce((a, b) => a + b, 0);
   const corrStructure = options.correlationStructure ?? 'exchangeable';
-  const samplingStructure = options.samplingStructure ?? 'cross-sectional';
+  const samplingStructure = options.samplingStructure ?? 'cross_section';
   const outcomeType = options.outcomeType ?? 'continuous';
   
 const hash = `${design.numSequences}-${design.numPeriods}-${structure}-${clusters}-${totalClusters}-${corrStructure}-${samplingStructure}-${outcomeType}`;
@@ -671,9 +671,9 @@ const hash = `${design.numSequences}-${design.numPeriods}-${structure}-${cluster
 
 _getSamplingStructure(samplingStructure) {
   switch (samplingStructure) {
-    case 'cross-sectional': return 'cross_section';
-    case 'closed-cohort': return 'closed_cohort';
-    case 'open-cohort': return 'open_cohort';
+    case 'cross_section': return 'cross_section';
+    case 'closed_cohort': return 'closed_cohort';
+    case 'open_cohort': return 'open_cohort';
     default: return 'cross_section';
   }
 },
