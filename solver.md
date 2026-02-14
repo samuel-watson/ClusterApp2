@@ -96,17 +96,27 @@ We use 7-point quadrature, which provides good accuracy for smooth integrands.
 
 ## Optimization: Levenberg-Marquardt Algorithm
 
-We solve the system of equations:
-
 **Cross-sectional (3 parameters):**
-$$\mathbf{r}(\boldsymbol{\theta}) = \begin{pmatrix} p_0 - \hat{p}_0(\boldsymbol{\theta}) \\ p_1 - \hat{p}_1(\boldsymbol{\theta}) \\ \text{ICC} - \widehat{\text{ICC}}(\boldsymbol{\theta}) \end{pmatrix} = \mathbf{0}$$
 
-where $\boldsymbol{\theta} = (\beta_0, \beta_1, \log\sigma_c)$.
+We solve for $\boldsymbol{\theta} = (\beta_0, \beta_1, \log\sigma_c)$ such that:
+
+$$\hat{p}_0(\boldsymbol{\theta}) = p_0$$
+
+$$\hat{p}_1(\boldsymbol{\theta}) = p_1$$
+
+$$\widehat{\text{ICC}}(\boldsymbol{\theta}) = \text{ICC}$$
 
 **Cohort (4 parameters):**
-$$\mathbf{r}(\boldsymbol{\theta}) = \begin{pmatrix} p_0 - \hat{p}_0(\boldsymbol{\theta}) \\ p_1 - \hat{p}_1(\boldsymbol{\theta}) \\ \text{ICC} - \widehat{\text{ICC}}(\boldsymbol{\theta}) \\ \text{IAC} - \widehat{\text{IAC}}(\boldsymbol{\theta}) \end{pmatrix} = \mathbf{0}$$
 
-where $\boldsymbol{\theta} = (\beta_0, \beta_1, \log\sigma_c, \log\sigma_p)$.
+We solve for $\boldsymbol{\theta} = (\beta_0, \beta_1, \log\sigma_c, \log\sigma_p)$ such that:
+
+$$\hat{p}_0(\boldsymbol{\theta}) = p_0$$
+
+$$\hat{p}_1(\boldsymbol{\theta}) = p_1$$
+
+$$\widehat{\text{ICC}}(\boldsymbol{\theta}) = \text{ICC}$$
+
+$$\widehat{\text{IAC}}(\boldsymbol{\theta}) = \text{IAC}$$
 
 ### Algorithm
 
