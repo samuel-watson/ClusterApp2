@@ -1718,7 +1718,15 @@ const CorrelationWarning = ({ warningCode }) => {
             {warningCode === 1 && (
               <>
                 The specified ICC/IAC combination requires moderately high random effect variance 
-                in the underlying GLMM. Power calculations should be interpreted with some caution.
+                in the underlying GLMM. Power calculations should be interpreted with some caution. {' '}
+                <a 
+                  href="https://github.com/samuel-watson/ClusterApp2/blob/master/solver.md" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="underline hover:text-red-900"
+                >
+                  Learn more
+                </a>
               </>
             )}
             {warningCode === 2 && (
@@ -1727,7 +1735,15 @@ const CorrelationWarning = ({ warningCode }) => {
                 This implies most individuals have near-deterministic outcomes (always respond 
                 or never respond), with the marginal prevalence arising from the population mix 
                 rather than individual-level uncertainty. Consider reducing IAC or increasing ICC 
-                for more realistic modelling assumptions.
+                for more realistic modelling assumptions. {' '}
+                <a 
+                  href="https://github.com/samuel-watson/ClusterApp2/blob/master/solver.md" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="underline hover:text-red-900"
+                >
+                  Learn more
+                </a>
               </>
             )}
             {warningCode === 3 && (
@@ -1736,7 +1752,15 @@ const CorrelationWarning = ({ warningCode }) => {
                 This combination is not likely to be achievable in a mixed model. This may arise if the 
                 correlation parameters imply most individuals have near-deterministic outcomes (always respond 
                 or never respond), with the marginal prevalence arising from the population mix 
-                rather than individual-level uncertainty. Power calculations are unreliable.
+                rather than individual-level uncertainty. Power calculations are unreliable. {' '}
+                <a 
+                  href="https://github.com/samuel-watson/ClusterApp2/blob/master/solver.md" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="underline hover:text-red-900"
+                >
+                  Learn more
+                </a>
               </>
             )}
           </p>
