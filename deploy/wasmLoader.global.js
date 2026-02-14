@@ -142,6 +142,13 @@ updateWeights(meanClusterSize) {
   }
   return this.wrapper.updateWeights(meanClusterSize);
 }
+
+getCorrelationWarning() {
+    if (!this.wrapper || !this.isInitialized) {
+        return 0;
+    }
+    return this.wrapper.getCorrelationWarning();
+}
     
     setAnalysisParams({ alpha, targetPower, treatmentEffect, includeIntercept }) {
       if (!this.wrapper) {
@@ -197,6 +204,24 @@ updateWeights(meanClusterSize) {
         this.isInitialized = false;
       }
     }
+
+    calculateOptimalSequenceWeights(sequenceMembership, maxIter = 100, tol = 1e-6) {
+  if (!this.wrapper || !this.isInitialized) {
+    throw new Error('Model not initialized');
+  }
+  const wasmSeqMem = toWasmVector(sequenceMembership);
+  try {
+    const result = this.wrapper.calculateOptimalSequenceWeights(wasmSeqMem, maxIter, tol);
+    return {
+      weights: fromWasmVector(result.weights),
+      valid: result.valid,
+      error: result.error,
+      iterations: result.iterations
+    };
+  } finally {
+    wasmSeqMem.delete();
+  }
+}
   }
 
   // Expose everything to global scope

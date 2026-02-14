@@ -872,11 +872,24 @@ _transformToLinkScale(baseline, treatmentEffect, outcomeType) {
     numPeriods,
     replacementRate
   );
-  
+
   console.log('=== _updateWrapperParameters COMPLETE ===');
 },
 
   // === PUBLIC API ===
+
+  getCorrelationWarning(designId = 'default') {
+  if (!wasmReady) {
+    return 0;
+  }
+  const cached = this._modelCache.get(designId);
+  
+  if (!cached || !cached.wrapper) {
+    return 0;
+  }
+  const result = cached.wrapper.getCorrelationWarning();
+  return result;
+},
 
   calculateResults(design, options, designId = 'default') {
     if (!wasmReady) {
@@ -992,6 +1005,75 @@ clearPlotCache() {
   }
 },
 
+calculateOptimalSequenceWeights(design, options = {}) {
+  if (!wasmReady) {
+    const n = design.numSequences;
+    return Array(n).fill(1 / n);
+  }
+
+  
+  
+  const originalClusters = [...design._clustersPerSequence];
+  design._clustersPerSequence = Array(design.numSequences).fill(1);
+  
+  const tempId = '_seq_weights_canonical';
+  
+  try {
+    const wrapper = this._getWrapper(tempId, design, options);
+    
+    // Build sequence membership array (1 cluster per sequence)
+    const sequenceMembership = [];
+    const grid = design.getGrid();
+    
+    for (let seq = 0; seq < design.numSequences; seq++) {
+      for (let t = 0; t < design.numPeriods; t++) {
+        const cell = grid[seq][t];
+        if (cell.status !== CellStatus.NOT_ENROLLED) {
+          sequenceMembership.push(seq);  // Will be passed as double
+        }
+      }
+    }
+    
+    // Use toWasmVector (doubles) instead of VectorInt
+    const wasmSeqMem = toWasmVector(sequenceMembership);
+    
+    const maxIter = options.weightIterations ?? 100;
+    const tol = options.weightTolerance ?? 1e-6;
+    
+    const result = wrapper.calculateOptimalSequenceWeights(wasmSeqMem, maxIter, tol);
+    wasmSeqMem.delete();
+
+    if (!result.valid) {
+  console.warn('Optimal sequence weights failed:', result.error);
+  design._clustersPerSequence = originalClusters;
+  const n = design.numSequences;
+  return Array(n).fill(1 / n);
+}
+    
+    design._clustersPerSequence = originalClusters;
+    
+    if (!result.valid) {
+      console.warn('Optimal sequence weights failed:', result.error);
+      const n = design.numSequences;
+      return Array(n).fill(1 / n);
+    }
+    
+    console.log(`Optimal sequence weights converged in ${result.iterations} iterations`);
+const weights = fromWasmVector(result.weights);
+console.log('Sequence weights (raw):', weights);
+const maxW = Math.max(...weights);
+const normalized = maxW > 0 ? weights.map(w => w / maxW) : weights;
+console.log('Sequence weights (normalized to max=1):', normalized);
+return weights;
+    
+  } catch (err) {
+    console.error('calculateOptimalSequenceWeights error:', err);
+    design._clustersPerSequence = originalClusters;
+    const n = design.numSequences;
+    return Array(n).fill(1 / n);
+  }
+},
+
   calculateOptimalWeights(design, options = {}) {
     if (!wasmReady) {
     return this._getFallbackWeights(design);
@@ -1051,6 +1133,8 @@ clearPlotCache() {
       return this._getFallbackWeights(design);
     }
   },
+
+  
 
   // Fallback weights when WASM fails
   _getFallbackWeights(design) {
@@ -1614,6 +1698,54 @@ const PowerWarning = ({ warning, selectedEstimator, designName }) => {
   );
 };
 
+const CorrelationWarning = ({ warningCode }) => {
+   console.log("CorrelationWarning rendered with:", warningCode);
+  if (!warningCode || warningCode === 0) return null;
+  
+  const isSevere = warningCode >= 2;
+  
+  return (
+    <div className={`${isSevere ? 'bg-red-50 border-red-300' : 'bg-amber-50 border-amber-300'} border rounded-xl p-4 text-sm`}>
+      <div className="flex items-start gap-2">
+        <span className={`${isSevere ? 'text-red-600' : 'text-amber-600'} text-lg`}>⚠️</span>
+        <div className="flex-1">
+          <p className={`font-medium ${isSevere ? 'text-red-800' : 'text-amber-800'} mb-2`}>
+            {warningCode === 1 && 'Correlation parameters require high random effect variance'}
+            {warningCode === 2 && 'Correlation parameters may not be realistic'}
+            {warningCode === 3 && 'Could not solve for valid model parameters'}
+          </p>
+          <p className={isSevere ? 'text-red-700' : 'text-amber-700'}>
+            {warningCode === 1 && (
+              <>
+                The specified ICC/IAC combination requires moderately high random effect variance 
+                in the underlying GLMM. Power calculations should be interpreted with some caution.
+              </>
+            )}
+            {warningCode === 2 && (
+              <>
+                The specified ICC/IAC combination requires extreme random effect variance. 
+                This implies most individuals have near-deterministic outcomes (always respond 
+                or never respond), with the marginal prevalence arising from the population mix 
+                rather than individual-level uncertainty. Consider reducing IAC or increasing ICC 
+                for more realistic modelling assumptions.
+              </>
+            )}
+            {warningCode === 3 && (
+              <>
+                The solver could not find valid GLMM parameters matching the specified ICC and IAC. 
+                This combination is not likely to be achievable in a mixed model. This may arise if the 
+                correlation parameters imply most individuals have near-deterministic outcomes (always respond 
+                or never respond), with the marginal prevalence arising from the population mix 
+                rather than individual-level uncertainty. Power calculations are unreliable.
+              </>
+            )}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // Plot Component using Plotly via CDN
 const PlotArea = ({
   designs,
@@ -2109,7 +2241,8 @@ function App() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [contextMenu, setContextMenu] = useState(null);
   const [cellSize, setCellSize] = useState(72);
-  const [showWeights, setShowWeights] = useState(false);
+  const [weightMode, setWeightMode] = useState('none'); // 'none', 'cell', 'row'
+const [rowWeights, setRowWeights] = useState(null);
   const designGridRef = useRef(null);
   const [resultsStale, setResultsStale] = useState(false);
   const [isCalculating, setIsCalculating] = useState(false);
@@ -2118,15 +2251,18 @@ function App() {
   );
   const [cacheVersion, setCacheVersion] = useState(0);
   const [cachedWeights, setCachedWeights] = useState(() =>
-    designs.map((d) => MathsInterface.calculateOptimalWeights(d.design))
-  );
+  designs.map((d) => ({
+    cell: MathsInterface.calculateOptimalWeights(d.design),
+    row: Array(d.design.numSequences).fill(1)
+  }))
+);
   const [wasmLoaded, setWasmLoaded] = useState(false);
 
   const activeDesign = designs[activeIndex];
   const design = activeDesign.design;
   const options = activeDesign.options;
 
-  const weights = showWeights ? cachedWeights[activeIndex] || null : null;
+  const weights = weightMode !== 'none' ? cachedWeights[activeIndex] || null : null;
   // List of all estimators for comparison
 const ESTIMATORS = [
   { key: 'mixed_model', label: 'Mixed Model' },
@@ -2180,6 +2316,31 @@ const powerWarning = useMemo(() => {
   return null;
 }, [wasmLoaded, resultsStale, isCalculating, cachedResults, activeIndex, options.estimator, designs]);
 
+const correlationWarning = useMemo(() => {
+  if (!wasmLoaded || resultsStale || isCalculating) return 0;
+  
+  const currentResult = cachedResults[activeIndex];
+  const currentPower = parseFloat(currentResult?.power);
+  if (isNaN(currentPower)) return 0;
+  
+  const d = designs[activeIndex];
+  if (!d) return 0;
+  
+  const outcomeType = options?.outcomeType || 'continuous';
+  const samplingStructure = options?.samplingStructure || 'cross_sectional';
+  const iac = options?.iac || 0;
+  console.log("correlation family: ", outcomeType);
+  console.log("correlation iac: " , iac);
+  console.log("correlation samp: ", samplingStructure);
+  if (outcomeType === 'continuous') return 0;
+  if (samplingStructure === 'cross_section') return 0;
+  if (iac <= 0) return 0;
+  console.log("correlation passed early exit");
+  // Pass the design ID - check how other functions reference it
+  const warning = MathsInterface.getCorrelationWarning('default');
+  console.log("Got warning:", warning);
+  return warning;
+}, [wasmLoaded, resultsStale, isCalculating, cachedResults, activeIndex, designs, options]);
 
   useEffect(() => {
   MathsInterface.initialize().then(success => {
@@ -2208,9 +2369,19 @@ const powerWarning = useMemo(() => {
     MathsInterface.calculateResults(d.design, d.options)
   );
 
-  const newWeights = designs.map((d) =>
-    MathsInterface.calculateOptimalWeights(d.design, d.options)
-  );
+  const newWeights = designs.map((d) => {
+  const cellWeights = MathsInterface.calculateOptimalWeights(d.design, d.options);
+  const seqWeights = MathsInterface.calculateOptimalSequenceWeights(d.design, d.options);
+  console.log('Raw sequence weights:', seqWeights);
+  const maxW = Math.max(...seqWeights);
+  const normalizedRow = maxW > 0 ? seqWeights.map(w => w / maxW) : seqWeights;
+  console.log('Normalized row weights:', normalizedRow);
+  
+  return {
+    cell: cellWeights,
+    row: normalizedRow
+  };
+});
 
   
   setCachedResults(newResults);
@@ -2616,21 +2787,33 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
                   onChange={(e) => setCellSize(Number(e.target.value))}
                   className="w-16"
                 />
-                <div className="h-4 w-px bg-slate-300 mx-1" />
-                <button
-                  onClick={() => setShowWeights(!showWeights)}
-                  className={`px-2 py-1 text-xs border rounded transition-colors
-    ${
-      showWeights
-        ? `bg-blue-100 border-blue-400 text-blue-700 ${
-            resultsStale ? "opacity-60" : ""
-          }`
+                <div className="flex gap-1">
+  <button
+    onClick={() => setWeightMode(weightMode === 'cell' ? 'none' : 'cell')}
+    className={`px-2 py-1 text-xs border rounded transition-colors
+      ${weightMode === 'cell'
+        ? `bg-blue-100 border-blue-400 text-blue-700 ${resultsStale ? "opacity-60" : ""}`
         : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
-    }`}
-                >
-                  {showWeights ? "✓ Weights" : "Show Weights"}
-                  {showWeights && resultsStale && " *"}
-                </button>
+      }`}
+  >
+    {weightMode === 'cell' ? "✓ Cell Weights" : "Cell Weights"}
+    {weightMode === 'cell' && resultsStale && " *"}
+  </button>
+  
+  <button
+    onClick={() => setWeightMode(weightMode === 'row' ? 'none' : 'row')}
+    className={`px-2 py-1 text-xs border rounded transition-colors
+      ${weightMode === 'row'
+        ? `bg-blue-100 border-blue-400 text-blue-700 ${resultsStale ? "opacity-60" : ""}`
+        : "bg-white border-slate-300 text-slate-600 hover:bg-slate-50"
+      }`}
+  >
+    {weightMode === 'row' ? "✓ Row Weights" : "Row Weights"}
+    {weightMode === 'row' && resultsStale && " *"}
+  </button>
+</div>
+                <div className="h-4 w-px bg-slate-300 mx-1" />
+                
 
                 <button
               onClick={exportDesignImage}
@@ -2720,15 +2903,21 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
                           {row.map((cell, j) => (
                             <React.Fragment key={j}>
                               <DesignCellComponent
-                                cell={cell}
-                                rowIndex={i}
-                                colIndex={j}
-                                onClick={handleCellClick}
-                                onContextMenu={handleCellContextMenu}
-                                cellSize={cellSize}
-                                sampleSizeMode={options.sampleSizeMode}
-                                scale={weights ? weights[i][j] : 1}
-                              />
+  cell={cell}
+  rowIndex={i}
+  colIndex={j}
+  onClick={handleCellClick}
+  onContextMenu={handleCellContextMenu}
+  cellSize={cellSize}
+  sampleSizeMode={options.sampleSizeMode}
+  scale={
+    weightMode === 'cell' && cachedWeights[activeIndex]?.cell 
+      ? cachedWeights[activeIndex].cell[i][j] :
+    weightMode === 'row' && cachedWeights[activeIndex]?.row 
+      ? cachedWeights[activeIndex].row[i] :
+    1
+  }
+/>
                               <div className="w-2" />
                             </React.Fragment>
                           ))}
@@ -3151,6 +3340,8 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
               isCalculating={isCalculating}
               onRecalculate={recalculateResults}
             />
+            <CorrelationWarning 
+            warningCode={correlationWarning} />
   <PowerWarning 
   warning={powerWarning} 
   selectedEstimator={options.estimator}

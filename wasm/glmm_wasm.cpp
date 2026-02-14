@@ -1,7 +1,7 @@
 // glmm_wasm.cpp
 // WASM interface for GLMM library
 // Compile with Emscripten
-
+#include <emscripten.h>
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
 #include <string>
@@ -15,6 +15,944 @@
 #include "glmmr.h"
 
 using namespace emscripten;
+
+#include <cmath>
+#include <array>
+#include <vector>
+#include <algorithm>
+
+// Gauss-Hermite nodes and weights (7-point for accuracy)
+constexpr int GH_N = 7;
+constexpr std::array<double, GH_N> gh_nodes = {
+    -2.65196, -1.67355, -0.81629, 0.0, 0.81629, 1.67355, 2.65196
+};
+constexpr std::array<double, GH_N> gh_weights = {
+    0.00097, 0.05455, 0.42560, 0.81026, 0.42560, 0.05455, 0.00097
+};
+
+inline double expit(double x) {
+    if (x > 20.0) return 1.0;
+    if (x < -20.0) return 0.0;
+    return 1.0 / (1.0 + std::exp(-x));
+}
+
+struct MarginalMoments {
+    double mean;           // E[Y]
+    double EYY_same_v;     // E_{u,v}[expit(...)^2] - same individual across periods
+    double EYY_diff_v;     // E_u[(E_v[expit(...)])^2] - different individuals
+};
+
+MarginalMoments computeMoments(double beta, double sigma_c, double sigma_p) {
+    MarginalMoments m = {0.0, 0.0, 0.0};
+    
+    const double sqrt2 = std::sqrt(2.0);
+    const double inv_sqrt_pi = 1.0 / std::sqrt(M_PI);
+    
+    for (int i = 0; i < GH_N; i++) {
+        double u = sqrt2 * sigma_c * gh_nodes[i];
+        double w_u = gh_weights[i];
+        
+        double inner_mean = 0.0;
+        double inner_sq = 0.0;
+        
+        if (sigma_p > 1e-10) {
+            for (int j = 0; j < GH_N; j++) {
+                double v = sqrt2 * sigma_p * gh_nodes[j];
+                double w_v = gh_weights[j];
+                
+                double p = expit(beta + u + v);
+                inner_mean += w_v * p;
+                inner_sq += w_v * p * p;
+            }
+            inner_mean *= inv_sqrt_pi;
+            inner_sq *= inv_sqrt_pi;
+        } else {
+            // No individual effect - cross-sectional
+            double p = expit(beta + u);
+            inner_mean = p;
+            inner_sq = p * p;
+        }
+        
+        m.mean += w_u * inner_mean;
+        m.EYY_same_v += w_u * inner_sq;
+        m.EYY_diff_v += w_u * inner_mean * inner_mean;
+    }
+    
+    m.mean *= inv_sqrt_pi;
+    m.EYY_same_v *= inv_sqrt_pi;
+    m.EYY_diff_v *= inv_sqrt_pi;
+    
+    return m;
+}
+
+inline double computeCorr(double EYY, double EY) {
+    double var_Y = EY * (1.0 - EY);
+    if (var_Y < 1e-10) return 0.0;
+    return (EYY - EY * EY) / var_Y;
+}
+
+struct SolverResult {
+    double beta0;
+    double beta1;
+    double sigma_c;
+    double sigma_p;
+    bool converged;
+    int iterations;
+    int warning_code;  // 0 = OK, 1 = high variance, 2 = extreme variance, 3 = failed
+};
+
+int checkPlausibility(double sigma_c, double sigma_p) {
+    double total_var = sigma_c * sigma_c + sigma_p * sigma_p;
+    static const double pi2_3 = M_PI * M_PI / 3.0;
+    
+    if (total_var > 2.0 * pi2_3) {
+        return 2;  // Extreme
+    } else if (total_var > pi2_3) {
+        return 1;  // High
+    }
+    return 0;
+}
+
+
+SolverResult solveParametersCohortBinomial(double p0, double p1, double icc, double iac,
+                                    int max_iter = 100, double tol = 1e-7) {
+    // Better initial guesses using attenuation approximation
+    static const double c = 0.588;  // 16*sqrt(3)/(15*pi)
+    
+    // Rough estimate of total variance from ICC
+    // ICC ≈ sigma_c^2 / (sigma_c^2 + pi^2/3) for small sigma_p
+    static const double pi2_3 = M_PI * M_PI / 3.0;
+    double sigma_c_init = std::sqrt(icc * pi2_3 / (1.0 - icc + 0.01));
+    sigma_c_init = std::min(2.0, std::max(0.1, sigma_c_init));
+    
+    double sigma_p_init = std::sqrt(iac * pi2_3 / (1.0 - iac + 0.01)) * 0.5;
+    sigma_p_init = std::min(0.3, std::max(0.05, sigma_p_init));
+    
+    // Attenuation factor
+    double V_total = sigma_c_init * sigma_c_init + sigma_p_init * sigma_p_init;
+    double atten = std::sqrt(1.0 + c * c * V_total);
+    
+    // Adjusted initial betas
+    double beta0_init = std::log(p0 / (1.0 - p0)) * atten;
+    double beta1_init = std::log(p1 / (1.0 - p1)) * atten - beta0_init;
+    
+    EM_ASM({
+        console.log("Initial guesses: beta0=", $0, "beta1=", $1, "sigma_c=", $2, "sigma_p=", $3);
+    }, beta0_init, beta1_init, sigma_c_init, sigma_p_init);
+    
+    std::array<double, 4> params = {
+        beta0_init, 
+        beta1_init, 
+        std::log(sigma_c_init), 
+        std::log(sigma_p_init)
+    };
+    
+    const double sigma_min = 0.01;
+    const double sigma_max = 6.0;
+    const double log_sigma_min = -4.0;  // sigma = ~0.018
+    const double log_sigma_max = 4.0;   // sigma = ~55
+    const double beta_max = 8.0;
+    const double eps = 1e-5;
+    
+    double lambda = 0.01;  // Levenberg-Marquardt damping
+    
+    for (int iter = 0; iter < max_iter; iter++) {
+        double sigma_c = std::exp(params[2]);
+        double sigma_p = std::exp(params[3]);
+
+        auto m0 = computeMoments(params[0], sigma_c, sigma_p);
+        auto m1 = computeMoments(params[0] + params[1], sigma_c, sigma_p);
+        
+        double curr_p0 = m0.mean;
+        double curr_p1 = m1.mean;
+        double curr_icc = computeCorr(m0.EYY_diff_v, m0.mean);
+        double curr_within_ind = computeCorr(m0.EYY_same_v, m0.mean);
+        
+        double curr_iac = 0.0;
+        if (curr_icc < 1.0 - 1e-10) {
+            curr_iac = (curr_within_ind - curr_icc) / (1.0 - curr_icc);
+        }
+        
+        std::array<double, 4> residuals = {
+            p0 - curr_p0,
+            p1 - curr_p1,
+            icc - curr_icc,
+            iac - curr_iac
+        };
+        
+        double max_resid = std::max({std::abs(residuals[0]), std::abs(residuals[1]),
+                                      std::abs(residuals[2]), std::abs(residuals[3])});
+        
+        if (iter % 10 == 0) {
+            EM_ASM({
+                console.log("Iter", $0, ": resid=", $1, "params=", $2, $3, $4, $5);
+            }, iter, max_resid, params[0], params[1], params[2], params[3]);
+        }
+        
+        if (max_resid < tol) {
+            double sigma_c = std::exp(params[2]);
+            double sigma_p = std::exp(params[3]);
+            int warning = checkPlausibility(sigma_c, sigma_p);
+            
+            if (warning == 1) {
+                EM_ASM({
+                    console.warn("Correlation warning: moderately high random effect variance required.");
+                });
+            } else if (warning == 2) {
+                EM_ASM({
+                    console.warn("Correlation warning: extreme random effect variance (sigma_c=%f, sigma_p=%f).",
+                                $0, $1);
+                }, sigma_c, sigma_p);
+            }
+            
+            return {params[0], params[1], sigma_c, sigma_p, true, iter, warning};
+        }
+        
+        // Numerical Jacobian
+        std::array<std::array<double, 4>, 4> J;
+        for (int j = 0; j < 4; j++) {
+            std::array<double, 4> params_plus = params;
+            double h = std::max(eps, std::abs(params[j]) * eps);
+            params_plus[j] += h;
+
+            double sc_p = std::exp(params_plus[2]);
+            double sp_p = std::exp(params_plus[3]);
+            
+            // Clamp
+            //if (j >= 2) params_plus[j] = std::max(sigma_min, std::min(sigma_max, params_plus[j]));
+            
+            auto m0_p = computeMoments(params_plus[0], sc_p, sp_p);
+            auto m1_p = computeMoments(params_plus[0] + params_plus[1], sc_p, sp_p);
+            
+            double icc_p = computeCorr(m0_p.EYY_diff_v, m0_p.mean);
+            double within_p = computeCorr(m0_p.EYY_same_v, m0_p.mean);
+            double iac_p = (icc_p < 1.0 - 1e-10) ? (within_p - icc_p) / (1.0 - icc_p) : 0.0;
+            
+            J[0][j] = (m0_p.mean - curr_p0) / h;
+            J[1][j] = (m1_p.mean - curr_p1) / h;
+            J[2][j] = (icc_p - curr_icc) / h;
+            J[3][j] = (iac_p - curr_iac) / h;
+        }
+        
+        // Levenberg-Marquardt: solve (J^T J + lambda * diag(J^T J)) * delta = J^T * r
+        std::array<std::array<double, 4>, 4> JTJ;
+        std::array<double, 4> JTr;
+        
+        for (int i = 0; i < 4; i++) {
+            JTr[i] = 0.0;
+            for (int k = 0; k < 4; k++) {
+                JTr[i] += J[k][i] * residuals[k];
+            }
+            for (int j = 0; j < 4; j++) {
+                JTJ[i][j] = 0.0;
+                for (int k = 0; k < 4; k++) {
+                    JTJ[i][j] += J[k][i] * J[k][j];
+                }
+            }
+            JTJ[i][i] *= (1.0 + lambda);  // Damping
+        }
+        
+        // Solve 4x4 system
+        std::array<std::array<double, 5>, 4> aug;
+        for (int i = 0; i < 4; i++) {
+            for (int j = 0; j < 4; j++) {
+                aug[i][j] = JTJ[i][j];
+            }
+            aug[i][4] = JTr[i];
+        }
+        
+        for (int col = 0; col < 4; col++) {
+            int pivot = col;
+            for (int row = col + 1; row < 4; row++) {
+                if (std::abs(aug[row][col]) > std::abs(aug[pivot][col])) {
+                    pivot = row;
+                }
+            }
+            std::swap(aug[col], aug[pivot]);
+            
+            if (std::abs(aug[col][col]) < 1e-12) {
+                aug[col][col] = 1e-12;
+            }
+            
+            for (int row = col + 1; row < 4; row++) {
+                double factor = aug[row][col] / aug[col][col];
+                for (int k = col; k < 5; k++) {
+                    aug[row][k] -= factor * aug[col][k];
+                }
+            }
+        }
+        
+        std::array<double, 4> delta = {0, 0, 0, 0};
+        for (int i = 3; i >= 0; i--) {
+            delta[i] = aug[i][4];
+            for (int j = i + 1; j < 4; j++) {
+                delta[i] -= aug[i][j] * delta[j];
+            }
+            if (std::abs(aug[i][i]) > 1e-12) {
+                delta[i] /= aug[i][i];
+            }
+        }
+        
+        // Clamp step size
+        double max_delta = std::max({std::abs(delta[0]), std::abs(delta[1]),
+                                      std::abs(delta[2]), std::abs(delta[3])});
+        if (max_delta > 1.0) {
+            for (int i = 0; i < 4; i++) delta[i] /= max_delta;
+        }
+        
+        // Try step
+        std::array<double, 4> params_new = {
+            std::max(-beta_max, std::min(beta_max, params[0] + delta[0])),
+            std::max(-beta_max, std::min(beta_max, params[1] + delta[1])),
+            std::max(log_sigma_min, std::min(log_sigma_max, params[2] + delta[2])),
+            std::max(log_sigma_min, std::min(log_sigma_max, params[3] + delta[3]))
+        };
+
+        double sc_new = std::exp(params_new[2]);
+        double sp_new = std::exp(params_new[3]);
+
+        auto m0_new = computeMoments(params_new[0], sc_new, sp_new);
+        auto m1_new = computeMoments(params_new[0] + params_new[1], sc_new, sp_new);
+        double new_icc = computeCorr(m0_new.EYY_diff_v, m0_new.mean);
+        double new_within = computeCorr(m0_new.EYY_same_v, m0_new.mean);
+        double new_iac = (new_icc < 1.0 - 1e-10) ? (new_within - new_icc) / (1.0 - new_icc) : 0.0;
+        
+        double new_max_resid = std::max({
+            std::abs(p0 - m0_new.mean),
+            std::abs(p1 - m1_new.mean),
+            std::abs(icc - new_icc),
+            std::abs(iac - new_iac)
+        });
+        
+        if (new_max_resid < max_resid) {
+            params = params_new;
+            lambda = std::max(1e-7, lambda * 0.5);  // Decrease damping
+        } else {
+            lambda = std::min(1e7, lambda * 2.0);   // Increase damping
+        }
+    }
+    
+    
+    
+    double sigma_c = std::exp(params[2]);
+double sigma_p = std::exp(params[3]);
+
+int warning = 3;  // Did not converge
+
+EM_ASM({
+    console.warn("Correlation warning: solver did not converge for specified ICC/IAC.");
+}, warning, sigma_c, sigma_p);
+
+return {params[0], params[1], sigma_c, sigma_p, false, max_iter, warning};
+}
+
+MarginalMoments computeMomentsPoisson(double beta, double sigma_c, double sigma_p) {
+    MarginalMoments m = {0.0, 0.0, 0.0};
+    
+    const double sqrt2 = std::sqrt(2.0);
+    const double inv_sqrt_pi = 1.0 / std::sqrt(M_PI);
+    
+    for (int i = 0; i < GH_N; i++) {
+        double u = sqrt2 * sigma_c * gh_nodes[i];
+        double w_u = gh_weights[i];
+        
+        double inner_mean = 0.0;
+        double inner_sq = 0.0;
+        
+        if (sigma_p > 1e-10) {
+            for (int j = 0; j < GH_N; j++) {
+                double v = sqrt2 * sigma_p * gh_nodes[j];
+                double w_v = gh_weights[j];
+                
+                double mu = std::exp(beta + u + v);
+                inner_mean += w_v * mu;
+                inner_sq += w_v * mu * mu;
+            }
+            inner_mean *= inv_sqrt_pi;
+            inner_sq *= inv_sqrt_pi;
+        } else {
+            double mu = std::exp(beta + u);
+            inner_mean = mu;
+            inner_sq = mu * mu;
+        }
+        
+        m.mean += w_u * inner_mean;
+        m.EYY_same_v += w_u * inner_sq;
+        m.EYY_diff_v += w_u * inner_mean * inner_mean;
+    }
+    
+    m.mean *= inv_sqrt_pi;
+    m.EYY_same_v *= inv_sqrt_pi;
+    m.EYY_diff_v *= inv_sqrt_pi;
+    
+    return m;
+}
+
+inline double computeCorrPoisson(double EYY, double EY, double EY2_same_v) {
+    // For Poisson: Var(Y) = E[mu] + Var(mu) = E[mu] + E[mu^2] - E[mu]^2
+    double var_Y = EY + EY2_same_v - EY * EY;
+    if (var_Y < 1e-10) return 0.0;
+    return (EYY - EY * EY) / var_Y;
+}
+
+SolverResult solveParametersCohortPoisson(double mu0, double mu1, double icc, double iac,
+                                           int max_iter = 150, double tol = 1e-6) {
+    // Initial guesses
+    // For log-normal RE: E[Y] = exp(beta + sigma^2/2)
+    // So beta = log(mu) - sigma^2/2
+    double sigma_c_init = std::sqrt(std::max(0.01, icc * 0.5));
+    double sigma_p_init = std::sqrt(std::max(0.01, iac * 0.3));
+    
+    double V_total = sigma_c_init * sigma_c_init + sigma_p_init * sigma_p_init;
+    double beta0_init = std::log(mu0) - V_total / 2.0;
+    double beta1_init = std::log(mu1) - V_total / 2.0 - beta0_init;
+    
+    EM_ASM({
+        console.log("Poisson solver - Initial: beta0=", $0, "beta1=", $1, 
+                    "sigma_c=", $2, "sigma_p=", $3);
+    }, beta0_init, beta1_init, sigma_c_init, sigma_p_init);
+    
+    std::array<double, 4> params = {
+        beta0_init,
+        beta1_init,
+        std::log(sigma_c_init),
+        std::log(sigma_p_init)
+    };
+    
+    const double beta_max = 10.0;
+    const double log_sigma_min = -4.0;
+    const double log_sigma_max = 4.0;
+    const double eps = 1e-5;
+    
+    double lambda = 0.1;
+    
+    for (int iter = 0; iter < max_iter; iter++) {
+        double sigma_c = std::exp(params[2]);
+        double sigma_p = std::exp(params[3]);
+        
+        auto m0 = computeMomentsPoisson(params[0], sigma_c, sigma_p);
+        auto m1 = computeMomentsPoisson(params[0] + params[1], sigma_c, sigma_p);
+        
+        double curr_mu0 = m0.mean;
+        double curr_mu1 = m1.mean;
+        double curr_icc = computeCorrPoisson(m0.EYY_diff_v, m0.mean, m0.EYY_same_v);
+        double curr_within = computeCorrPoisson(m0.EYY_same_v, m0.mean, m0.EYY_same_v);
+        
+        double curr_iac = 0.0;
+        if (curr_icc < 1.0 - 1e-10) {
+            curr_iac = (curr_within - curr_icc) / (1.0 - curr_icc);
+        }
+        
+        std::array<double, 4> residuals = {
+            mu0 - curr_mu0,
+            mu1 - curr_mu1,
+            icc - curr_icc,
+            iac - curr_iac
+        };
+        
+        double sum_sq = residuals[0]*residuals[0] + residuals[1]*residuals[1] +
+                        residuals[2]*residuals[2] + residuals[3]*residuals[3];
+        double rms_resid = std::sqrt(sum_sq / 4.0);
+        
+        if (iter % 20 == 0) {
+            EM_ASM({
+                console.log("Poisson Iter", $0, ": rms=", $1, "sigma_c=", $2, 
+                            "sigma_p=", $3, "icc=", $4, "iac=", $5);
+            }, iter, rms_resid, sigma_c, sigma_p, curr_icc, curr_iac);
+        }
+        
+        if (rms_resid < tol) {
+            int warning = checkPlausibility(sigma_c, sigma_p);
+            
+            EM_ASM({
+                console.log("Poisson solver converged at iter", $0);
+            }, iter);
+            
+            return {params[0], params[1], sigma_c, sigma_p, true, iter, warning};
+        }
+        
+        // Numerical Jacobian
+        std::array<std::array<double, 4>, 4> J;
+        for (int j = 0; j < 4; j++) {
+            std::array<double, 4> params_plus = params;
+            double h = std::max(eps, std::abs(params[j]) * eps);
+            params_plus[j] += h;
+            
+            double sc_p = std::exp(params_plus[2]);
+            double sp_p = std::exp(params_plus[3]);
+            
+            auto m0_p = computeMomentsPoisson(params_plus[0], sc_p, sp_p);
+            auto m1_p = computeMomentsPoisson(params_plus[0] + params_plus[1], sc_p, sp_p);
+            
+            double icc_p = computeCorrPoisson(m0_p.EYY_diff_v, m0_p.mean, m0_p.EYY_same_v);
+            double within_p = computeCorrPoisson(m0_p.EYY_same_v, m0_p.mean, m0_p.EYY_same_v);
+            double iac_p = (icc_p < 1.0 - 1e-10) ? (within_p - icc_p) / (1.0 - icc_p) : 0.0;
+            
+            J[0][j] = (m0_p.mean - curr_mu0) / h;
+            J[1][j] = (m1_p.mean - curr_mu1) / h;
+            J[2][j] = (icc_p - curr_icc) / h;
+            J[3][j] = (iac_p - curr_iac) / h;
+        }
+        
+        // Levenberg-Marquardt
+        std::array<std::array<double, 4>, 4> JTJ;
+        std::array<double, 4> JTr;
+        
+        for (int i = 0; i < 4; i++) {
+            JTr[i] = 0.0;
+            for (int k = 0; k < 4; k++) {
+                JTr[i] += J[k][i] * residuals[k];
+            }
+            for (int jj = 0; jj < 4; jj++) {
+                JTJ[i][jj] = 0.0;
+                for (int k = 0; k < 4; k++) {
+                    JTJ[i][jj] += J[k][i] * J[k][jj];
+                }
+            }
+            JTJ[i][i] += lambda;
+        }
+        
+        // Gaussian elimination
+        std::array<std::array<double, 5>, 4> aug;
+        for (int i = 0; i < 4; i++) {
+            for (int jj = 0; jj < 4; jj++) aug[i][jj] = JTJ[i][jj];
+            aug[i][4] = JTr[i];
+        }
+        
+        for (int col = 0; col < 4; col++) {
+            int pivot = col;
+            for (int row = col + 1; row < 4; row++) {
+                if (std::abs(aug[row][col]) > std::abs(aug[pivot][col])) pivot = row;
+            }
+            std::swap(aug[col], aug[pivot]);
+            if (std::abs(aug[col][col]) < 1e-14) aug[col][col] = 1e-14;
+            
+            for (int row = col + 1; row < 4; row++) {
+                double factor = aug[row][col] / aug[col][col];
+                for (int k = col; k < 5; k++) aug[row][k] -= factor * aug[col][k];
+            }
+        }
+        
+        std::array<double, 4> delta = {0, 0, 0, 0};
+        for (int i = 3; i >= 0; i--) {
+            delta[i] = aug[i][4];
+            for (int jj = i + 1; jj < 4; jj++) delta[i] -= aug[i][jj] * delta[jj];
+            delta[i] /= aug[i][i];
+        }
+        
+        // Trust region
+        double step_norm = std::sqrt(delta[0]*delta[0] + delta[1]*delta[1] +
+                                     delta[2]*delta[2] + delta[3]*delta[3]);
+        double max_step = 2.0;
+        if (step_norm > max_step) {
+            for (int i = 0; i < 4; i++) delta[i] *= max_step / step_norm;
+        }
+        
+        // Line search
+        double alpha = 1.0;
+        bool improved = false;
+        
+        for (int ls = 0; ls < 15; ls++) {
+            std::array<double, 4> params_new = {
+                std::max(-beta_max, std::min(beta_max, params[0] + alpha * delta[0])),
+                std::max(-beta_max, std::min(beta_max, params[1] + alpha * delta[1])),
+                std::max(log_sigma_min, std::min(log_sigma_max, params[2] + alpha * delta[2])),
+                std::max(log_sigma_min, std::min(log_sigma_max, params[3] + alpha * delta[3]))
+            };
+            
+            double sc_new = std::exp(params_new[2]);
+            double sp_new = std::exp(params_new[3]);
+            
+            auto m0_new = computeMomentsPoisson(params_new[0], sc_new, sp_new);
+            auto m1_new = computeMomentsPoisson(params_new[0] + params_new[1], sc_new, sp_new);
+            double new_icc = computeCorrPoisson(m0_new.EYY_diff_v, m0_new.mean, m0_new.EYY_same_v);
+            double new_within = computeCorrPoisson(m0_new.EYY_same_v, m0_new.mean, m0_new.EYY_same_v);
+            double new_iac = (new_icc < 1.0 - 1e-10) ? (new_within - new_icc) / (1.0 - new_icc) : 0.0;
+            
+            double new_sum_sq = (mu0 - m0_new.mean) * (mu0 - m0_new.mean) +
+                                (mu1 - m1_new.mean) * (mu1 - m1_new.mean) +
+                                (icc - new_icc) * (icc - new_icc) +
+                                (iac - new_iac) * (iac - new_iac);
+            
+            if (new_sum_sq < sum_sq) {
+                params = params_new;
+                improved = true;
+                lambda = std::max(1e-8, lambda * 0.7);
+                break;
+            }
+            alpha *= 0.5;
+        }
+        
+        if (!improved) {
+            lambda = std::min(1e6, lambda * 3.0);
+        }
+    }
+    
+    double sigma_c = std::exp(params[2]);
+    double sigma_p = std::exp(params[3]);
+    int warning = 3;
+    
+    EM_ASM({
+        console.warn("Poisson solver did not converge for specified ICC/IAC.");
+    });
+    
+    return {params[0], params[1], sigma_c, sigma_p, false, max_iter, warning};
+}
+
+SolverResult solveParametersCrossSectionalBinomial(double p0, double p1, double icc,
+                                                    int max_iter = 100, double tol = 1e-6) {
+    static const double pi2_3 = M_PI * M_PI / 3.0;
+    static const double c = 0.588;
+    
+    // Initial guesses
+    double sigma_c_init = std::sqrt(icc * pi2_3 / (1.0 - icc + 0.01));
+    sigma_c_init = std::max(0.1, std::min(2.0, sigma_c_init));
+    
+    double atten = std::sqrt(1.0 + c * c * sigma_c_init * sigma_c_init);
+    double beta0_init = std::log(p0 / (1.0 - p0)) * atten;
+    double beta1_init = std::log(p1 / (1.0 - p1)) * atten - beta0_init;
+    
+    // params = {beta0, beta1, log_sigma_c}
+    std::array<double, 3> params = {
+        beta0_init,
+        beta1_init,
+        std::log(sigma_c_init)
+    };
+    
+    const double beta_max = 10.0;
+    const double log_sigma_min = -4.0;
+    const double log_sigma_max = 4.0;
+    const double eps = 1e-5;
+    
+    double lambda = 0.1;
+    
+    for (int iter = 0; iter < max_iter; iter++) {
+        double sigma_c = std::exp(params[2]);
+        
+        auto m0 = computeMoments(params[0], sigma_c, 0.0);
+        auto m1 = computeMoments(params[0] + params[1], sigma_c, 0.0);
+        
+        double curr_p0 = m0.mean;
+        double curr_p1 = m1.mean;
+        double curr_icc = computeCorr(m0.EYY_diff_v, m0.mean);
+        
+        std::array<double, 3> residuals = {
+            p0 - curr_p0,
+            p1 - curr_p1,
+            icc - curr_icc
+        };
+        
+        double sum_sq = residuals[0]*residuals[0] + residuals[1]*residuals[1] +
+                        residuals[2]*residuals[2];
+        double rms_resid = std::sqrt(sum_sq / 3.0);
+        
+        if (iter % 20 == 0) {
+            EM_ASM({
+                console.log("Binomial XS Iter", $0, ": rms=", $1, "sigma_c=", $2, "icc=", $3);
+            }, iter, rms_resid, sigma_c, curr_icc);
+        }
+        
+        if (rms_resid < tol) {
+            int warning = checkPlausibility(sigma_c, 0.0);
+            return {params[0], params[1], sigma_c, 0.0, true, iter, warning};
+        }
+        
+        // Numerical Jacobian (3x3)
+        std::array<std::array<double, 3>, 3> J;
+        for (int j = 0; j < 3; j++) {
+            std::array<double, 3> params_plus = params;
+            double h = std::max(eps, std::abs(params[j]) * eps);
+            params_plus[j] += h;
+            
+            double sc_p = std::exp(params_plus[2]);
+            
+            auto m0_p = computeMoments(params_plus[0], sc_p, 0.0);
+            auto m1_p = computeMoments(params_plus[0] + params_plus[1], sc_p, 0.0);
+            
+            double icc_p = computeCorr(m0_p.EYY_diff_v, m0_p.mean);
+            
+            J[0][j] = (m0_p.mean - curr_p0) / h;
+            J[1][j] = (m1_p.mean - curr_p1) / h;
+            J[2][j] = (icc_p - curr_icc) / h;
+        }
+        
+        // Levenberg-Marquardt (3x3)
+        std::array<std::array<double, 3>, 3> JTJ;
+        std::array<double, 3> JTr;
+        
+        for (int i = 0; i < 3; i++) {
+            JTr[i] = 0.0;
+            for (int k = 0; k < 3; k++) {
+                JTr[i] += J[k][i] * residuals[k];
+            }
+            for (int jj = 0; jj < 3; jj++) {
+                JTJ[i][jj] = 0.0;
+                for (int k = 0; k < 3; k++) {
+                    JTJ[i][jj] += J[k][i] * J[k][jj];
+                }
+            }
+            JTJ[i][i] += lambda;
+        }
+        
+        // Gaussian elimination (3x3)
+        std::array<std::array<double, 4>, 3> aug;
+        for (int i = 0; i < 3; i++) {
+            for (int jj = 0; jj < 3; jj++) aug[i][jj] = JTJ[i][jj];
+            aug[i][3] = JTr[i];
+        }
+        
+        for (int col = 0; col < 3; col++) {
+            int pivot = col;
+            for (int row = col + 1; row < 3; row++) {
+                if (std::abs(aug[row][col]) > std::abs(aug[pivot][col])) pivot = row;
+            }
+            std::swap(aug[col], aug[pivot]);
+            if (std::abs(aug[col][col]) < 1e-14) aug[col][col] = 1e-14;
+            
+            for (int row = col + 1; row < 3; row++) {
+                double factor = aug[row][col] / aug[col][col];
+                for (int k = col; k < 4; k++) aug[row][k] -= factor * aug[col][k];
+            }
+        }
+        
+        std::array<double, 3> delta = {0, 0, 0};
+        for (int i = 2; i >= 0; i--) {
+            delta[i] = aug[i][3];
+            for (int jj = i + 1; jj < 3; jj++) delta[i] -= aug[i][jj] * delta[jj];
+            delta[i] /= aug[i][i];
+        }
+        
+        // Trust region
+        double step_norm = std::sqrt(delta[0]*delta[0] + delta[1]*delta[1] + delta[2]*delta[2]);
+        if (step_norm > 2.0) {
+            for (int i = 0; i < 3; i++) delta[i] *= 2.0 / step_norm;
+        }
+        
+        // Line search
+        double alpha = 1.0;
+        bool improved = false;
+        
+        for (int ls = 0; ls < 15; ls++) {
+            std::array<double, 3> params_new = {
+                std::max(-beta_max, std::min(beta_max, params[0] + alpha * delta[0])),
+                std::max(-beta_max, std::min(beta_max, params[1] + alpha * delta[1])),
+                std::max(log_sigma_min, std::min(log_sigma_max, params[2] + alpha * delta[2]))
+            };
+            
+            double sc_new = std::exp(params_new[2]);
+            
+            auto m0_new = computeMoments(params_new[0], sc_new, 0.0);
+            auto m1_new = computeMoments(params_new[0] + params_new[1], sc_new, 0.0);
+            double new_icc = computeCorr(m0_new.EYY_diff_v, m0_new.mean);
+            
+            double new_sum_sq = (p0 - m0_new.mean) * (p0 - m0_new.mean) +
+                                (p1 - m1_new.mean) * (p1 - m1_new.mean) +
+                                (icc - new_icc) * (icc - new_icc);
+            
+            if (new_sum_sq < sum_sq) {
+                params = params_new;
+                improved = true;
+                lambda = std::max(1e-8, lambda * 0.7);
+                break;
+            }
+            alpha *= 0.5;
+        }
+        
+        if (!improved) {
+            lambda = std::min(1e6, lambda * 3.0);
+        }
+    }
+    
+    double sigma_c = std::exp(params[2]);
+    return {params[0], params[1], sigma_c, 0.0, false, max_iter, 3};
+}
+
+
+SolverResult solveParametersCrossSectionalPoisson(double mu0, double mu1, double icc,
+                                                   int max_iter = 100, double tol = 1e-6) {
+    // Initial guesses
+    double sigma_c_init = std::sqrt(std::max(0.01, icc * 0.5));
+    double V_init = sigma_c_init * sigma_c_init;
+    double beta0_init = std::log(mu0) - V_init / 2.0;
+    double beta1_init = std::log(mu1) - V_init / 2.0 - beta0_init;
+    
+    std::array<double, 3> params = {
+        beta0_init,
+        beta1_init,
+        std::log(sigma_c_init)
+    };
+    
+    const double beta_max = 10.0;
+    const double log_sigma_min = -4.0;
+    const double log_sigma_max = 4.0;
+    const double eps = 1e-5;
+    
+    double lambda = 0.1;
+    
+    for (int iter = 0; iter < max_iter; iter++) {
+        double sigma_c = std::exp(params[2]);
+        
+        auto m0 = computeMomentsPoisson(params[0], sigma_c, 0.0);
+        auto m1 = computeMomentsPoisson(params[0] + params[1], sigma_c, 0.0);
+        
+        double curr_mu0 = m0.mean;
+        double curr_mu1 = m1.mean;
+        double curr_icc = computeCorrPoisson(m0.EYY_diff_v, m0.mean, m0.EYY_same_v);
+        
+        std::array<double, 3> residuals = {
+            mu0 - curr_mu0,
+            mu1 - curr_mu1,
+            icc - curr_icc
+        };
+        
+        double sum_sq = residuals[0]*residuals[0] + residuals[1]*residuals[1] +
+                        residuals[2]*residuals[2];
+        double rms_resid = std::sqrt(sum_sq / 3.0);
+        
+        if (iter % 20 == 0) {
+            EM_ASM({
+                console.log("Poisson XS Iter", $0, ": rms=", $1, "sigma_c=", $2, "icc=", $3);
+            }, iter, rms_resid, sigma_c, curr_icc);
+        }
+        
+        if (rms_resid < tol) {
+            int warning = checkPlausibility(sigma_c, 0.0);
+            return {params[0], params[1], sigma_c, 0.0, true, iter, warning};
+        }
+        
+        // Numerical Jacobian (3x3)
+        std::array<std::array<double, 3>, 3> J;
+        for (int j = 0; j < 3; j++) {
+            std::array<double, 3> params_plus = params;
+            double h = std::max(eps, std::abs(params[j]) * eps);
+            params_plus[j] += h;
+            
+            double sc_p = std::exp(params_plus[2]);
+            
+            auto m0_p = computeMomentsPoisson(params_plus[0], sc_p, 0.0);
+            auto m1_p = computeMomentsPoisson(params_plus[0] + params_plus[1], sc_p, 0.0);
+            
+            double icc_p = computeCorrPoisson(m0_p.EYY_diff_v, m0_p.mean, m0_p.EYY_same_v);
+            
+            J[0][j] = (m0_p.mean - curr_mu0) / h;
+            J[1][j] = (m1_p.mean - curr_mu1) / h;
+            J[2][j] = (icc_p - curr_icc) / h;
+        }
+        
+        // Levenberg-Marquardt (3x3)
+        std::array<std::array<double, 3>, 3> JTJ;
+        std::array<double, 3> JTr;
+        
+        for (int i = 0; i < 3; i++) {
+            JTr[i] = 0.0;
+            for (int k = 0; k < 3; k++) {
+                JTr[i] += J[k][i] * residuals[k];
+            }
+            for (int jj = 0; jj < 3; jj++) {
+                JTJ[i][jj] = 0.0;
+                for (int k = 0; k < 3; k++) {
+                    JTJ[i][jj] += J[k][i] * J[k][jj];
+                }
+            }
+            JTJ[i][i] += lambda;
+        }
+        
+        // Gaussian elimination (3x3)
+        std::array<std::array<double, 4>, 3> aug;
+        for (int i = 0; i < 3; i++) {
+            for (int jj = 0; jj < 3; jj++) aug[i][jj] = JTJ[i][jj];
+            aug[i][3] = JTr[i];
+        }
+        
+        for (int col = 0; col < 3; col++) {
+            int pivot = col;
+            for (int row = col + 1; row < 3; row++) {
+                if (std::abs(aug[row][col]) > std::abs(aug[pivot][col])) pivot = row;
+            }
+            std::swap(aug[col], aug[pivot]);
+            if (std::abs(aug[col][col]) < 1e-14) aug[col][col] = 1e-14;
+            
+            for (int row = col + 1; row < 3; row++) {
+                double factor = aug[row][col] / aug[col][col];
+                for (int k = col; k < 4; k++) aug[row][k] -= factor * aug[col][k];
+            }
+        }
+        
+        std::array<double, 3> delta = {0, 0, 0};
+        for (int i = 2; i >= 0; i--) {
+            delta[i] = aug[i][3];
+            for (int jj = i + 1; jj < 3; jj++) delta[i] -= aug[i][jj] * delta[jj];
+            delta[i] /= aug[i][i];
+        }
+        
+        // Trust region
+        double step_norm = std::sqrt(delta[0]*delta[0] + delta[1]*delta[1] + delta[2]*delta[2]);
+        if (step_norm > 2.0) {
+            for (int i = 0; i < 3; i++) delta[i] *= 2.0 / step_norm;
+        }
+        
+        // Line search
+        double alpha = 1.0;
+        bool improved = false;
+        
+        for (int ls = 0; ls < 15; ls++) {
+            std::array<double, 3> params_new = {
+                std::max(-beta_max, std::min(beta_max, params[0] + alpha * delta[0])),
+                std::max(-beta_max, std::min(beta_max, params[1] + alpha * delta[1])),
+                std::max(log_sigma_min, std::min(log_sigma_max, params[2] + alpha * delta[2]))
+            };
+            
+            double sc_new = std::exp(params_new[2]);
+            
+            auto m0_new = computeMomentsPoisson(params_new[0], sc_new, 0.0);
+            auto m1_new = computeMomentsPoisson(params_new[0] + params_new[1], sc_new, 0.0);
+            double new_icc = computeCorrPoisson(m0_new.EYY_diff_v, m0_new.mean, m0_new.EYY_same_v);
+            
+            double new_sum_sq = (mu0 - m0_new.mean) * (mu0 - m0_new.mean) +
+                                (mu1 - m1_new.mean) * (mu1 - m1_new.mean) +
+                                (icc - new_icc) * (icc - new_icc);
+            
+            if (new_sum_sq < sum_sq) {
+                params = params_new;
+                improved = true;
+                lambda = std::max(1e-8, lambda * 0.7);
+                break;
+            }
+            alpha *= 0.5;
+        }
+        
+        if (!improved) {
+            lambda = std::min(1e6, lambda * 3.0);
+        }
+    }
+    
+    double sigma_c = std::exp(params[2]);
+    return {params[0], params[1], sigma_c, 0.0, false, max_iter, 3};
+}
+// Main entry point
+// Main entry point
+SolverResult solveGLMMParameters(double y0, double y1, double icc, double iac,
+                                  const std::string& sampling_structure,
+                                  const std::string& family) {
+    bool is_cohort = (sampling_structure != "cross_section" && iac > 0.0);
+    
+    if (family == "binomial") {
+        if (is_cohort) {
+            return solveParametersCohortBinomial(y0, y1, icc, iac);
+        } else {
+            return solveParametersCrossSectionalBinomial(y0, y1, icc);
+        }
+    } else if (family == "poisson") {
+        if (is_cohort) {
+            return solveParametersCohortPoisson(y0, y1, icc, iac);
+        } else {
+            return solveParametersCrossSectionalPoisson(y0, y1, icc);
+        }
+    }
+    
+    // Fallback - shouldn't reach here for non-Gaussian
+    return {0, 0, 0, 0, false, 0, 3};
+}
 
 // Result structure returned to JavaScript
 struct AnalysisResult {
@@ -35,6 +973,13 @@ enum class Estimator {
     KenwardRoger = 3,
     GEEIndependence = 4,
     GEEIndependenceRobust = 5
+};
+
+struct OptimalSequenceWeightsResult {
+    std::vector<double> weights;
+    bool valid;
+    std::string error;
+    int iterations;
 };
 
 // Wrapper class for the GLMM model
@@ -64,6 +1009,8 @@ private:
     bool include_intercept;
     std::string correlation_structure;
     std::string sampling_structure;
+
+    int correlation_warning_ = 0;
 
 public:
     GLMMWrapper() 
@@ -140,6 +1087,8 @@ public:
             return false;
         }
     }
+
+    int getCorrelationWarning() const { return correlation_warning_; }
     
     // Convert ICC to variance parameters for non-Gaussian models
 std::pair<double, double> iccToVarPar(double baseline, double icc, const std::string& family) {
@@ -231,47 +1180,118 @@ bool updateParameters(double icc, double iac, double cac_or_lengthscale,
             }
         }
         else {
-            // Non-Gaussian: convert ICC to variance parameters
-            auto varvals = iccToVarPar(baseline, icc, family);
-            double ind_level_error = varvals.first;
-            double cl_level_error = varvals.second;
-            
-            if (sampling_structure == "closed_cohort") {
-                double ind_cov = iac * varvals.first / (1.0 - iac);
-                ind_level_error += ind_cov;
-            }
-            
+            double cl_level_error = 0.0;
+            double tau3 = 0.0;
+            if(family == "binomial"){
+                double p0 = std::exp(baseline) / (1.0 + std::exp(baseline));
+                double p1 = std::exp(baseline + te) / (1.0 + std::exp(baseline + te));
+                auto result = solveGLMMParameters(p0, p1, icc, iac, sampling_structure, family);
+                correlation_warning_ = result.warning_code;
+                EM_ASM({
+                    console.log("=== GLMM Solver Debug ===");
+                    console.log("Inputs: p0=", $0, "p1=", $1, "icc=", $2, "iac=", $3);
+                    console.log("Converged:", $4, "Iterations:", $5);
+                    console.log("beta0=", $6, "beta1=", $7);
+                    console.log("sigma_c=", $8, "sigma_p=", $9);
+                    }, p0, p1, icc, iac, 
+                    result.converged ? 1 : 0, result.iterations,
+                    result.beta0, result.beta1, 
+                    result.sigma_c, result.sigma_p);
+                // Also print the residuals at the solution
+                auto m0_check = computeMoments(result.beta0, result.sigma_c, result.sigma_p);
+                auto m1_check = computeMoments(result.beta0 + result.beta1, result.sigma_c, result.sigma_p);
+                double check_icc = computeCorr(m0_check.EYY_diff_v, m0_check.mean);
+                double check_within = computeCorr(m0_check.EYY_same_v, m0_check.mean);
+                double check_iac = (check_icc < 1.0 - 1e-10) ? (check_within - check_icc) / (1.0 - check_icc) : 0.0;
+
+                EM_ASM({
+                    console.log("Achieved: p0=", $0, "p1=", $1, "icc=", $2, "iac=", $3);
+                    console.log("Residuals: p0=", $4, "p1=", $5, "icc=", $6, "iac=", $7);
+                }, m0_check.mean, m1_check.mean, check_icc, check_iac,
+                p0 - m0_check.mean, p1 - m1_check.mean, icc - check_icc, iac - check_iac);    
+
+                beta[0] = result.beta0;
+                beta[1] = result.beta1;
+                
+                // Cluster variance
+                cl_level_error = result.sigma_c * result.sigma_c;
+                
+                // Cohort effect at cluster-period level
+                if (sampling_structure == "closed_cohort" || sampling_structure == "open_cohort") {
+                    tau3 = result.sigma_p * result.sigma_p / mean_n;
+                }
+            } else if (family == "poisson"){
+                double mu0 = std::exp(baseline);
+                double mu1 = std::exp(baseline + te);
+                auto result = solveGLMMParameters(mu0, mu1, icc, iac, sampling_structure, family);
+                correlation_warning_ = result.warning_code;
+                EM_ASM({
+                    console.log("=== GLMM Solver Debug ===");
+                    console.log("Inputs: mu0=", $0, "mu1=", $1, "icc=", $2, "iac=", $3);
+                    console.log("Converged:", $4, "Iterations:", $5);
+                    console.log("beta0=", $6, "beta1=", $7);
+                    console.log("sigma_c=", $8, "sigma_p=", $9);
+                    }, mu0, mu1, icc, iac, 
+                    result.converged ? 1 : 0, result.iterations,
+                    result.beta0, result.beta1, 
+                    result.sigma_c, result.sigma_p);
+                // Also print the residuals at the solution
+                auto m0_check = computeMomentsPoisson(result.beta0, result.sigma_c, result.sigma_p);
+                auto m1_check = computeMomentsPoisson(result.beta0 + result.beta1, result.sigma_c, result.sigma_p);
+                double check_icc = computeCorrPoisson(m0_check.EYY_diff_v, m0_check.mean, m0_check.EYY_same_v);
+                double check_within = computeCorrPoisson(m0_check.EYY_same_v, m0_check.mean, m0_check.EYY_same_v);
+                double check_iac = (check_icc < 1.0 - 1e-10) ? (check_within - check_icc) / (1.0 - check_icc) : 0.0;
+
+                EM_ASM({
+                    console.log("Achieved: mu0=", $0, "mu1=", $1, "icc=", $2, "iac=", $3);
+                    console.log("Residuals: mu0=", $4, "p1=", $5, "icc=", $6, "iac=", $7);
+                }, m0_check.mean, m1_check.mean, check_icc, check_iac,
+                mu0 - m0_check.mean, mu1 - m1_check.mean, icc - check_icc, iac - check_iac);    
+
+                beta[0] = result.beta0;
+                beta[1] = result.beta1;
+                // Cluster variance
+                cl_level_error = result.sigma_c * result.sigma_c;
+                
+                // Cohort effect at cluster-period level
+                if (sampling_structure == "closed_cohort" || sampling_structure == "open_cohort") {
+                    tau3 = result.sigma_p * result.sigma_p / mean_n;
+                }
+
+            }            
             if (correlation_structure == "nested_exchangeable") {
                 theta.push_back(cac_or_lengthscale * cl_level_error);
                 theta.push_back((1.0 - cac_or_lengthscale) * cl_level_error);
             }
-            else if (correlation_structure == "exponential_decay" || 
-                     correlation_structure == "exponential_function") {
+            else if (correlation_structure == "exponential_decay" || correlation_structure == "exponential_function") {
                 theta.push_back(cl_level_error);
                 theta.push_back(cac_or_lengthscale);
             }
             else {
                 theta.push_back(cl_level_error);
             }
-            
-            if (sampling_structure == "closed_cohort") {
-                double tau3 = iac * varvals.first / (1.0 - iac);
-                tau3 = tau3 / mean_n;
+            if (sampling_structure == "closed_cohort" && iac > 0) {
                 theta.push_back(tau3);
-            }
-            else if (sampling_structure == "open_cohort") {
-                double tau3 = iac * varvals.first / (1.0 - iac);
-                tau3 = tau3 / mean_n;
+            } else if (sampling_structure == "open_cohort" && iac > 0) {
                 theta.push_back(tau3);
                 theta.push_back(replacement_rate);  // Replacement rate
             }
-            
-            // Set dispersion for beta/gamma families if needed
-            if (family == "binomial" || family == "poisson") {
-                // These use the natural variance, no extra parameter needed
-            }
         }
         
+        EM_ASM({ console.log("--- beta values ---"); });
+        for (size_t i = 0; i < beta.size(); i++) {
+            EM_ASM({
+                console.log("beta[" + $0 + "] =", $1);
+            }, (int)i, beta[i]);
+        }
+
+        EM_ASM({ console.log("--- theta values ---"); });
+        for (size_t i = 0; i < theta.size(); i++) {
+            EM_ASM({
+                console.log("theta[" + $0 + "] =", $1);
+            }, (int)i, theta[i]);
+        }
+
         // Update the model
         model->update_beta(beta);
         model->update_theta(theta);
@@ -358,6 +1378,7 @@ AnalysisResult calculatePower(int estimator_type, double cv = 0.0) {
     result.ci_width = 0;
     result.valid = false;
     result.error = "";
+    double te = model->model.linear_predictor.parameters[1];
     
     if (!model || !model_valid) {
         result.error = "Model not initialized";
@@ -388,7 +1409,7 @@ AnalysisResult calculatePower(int estimator_type, double cv = 0.0) {
             }
             
             result.se = std::sqrt(bvar);
-            double zval = std::abs(treatment_effect / result.se);
+            double zval = std::abs(te / result.se);
             
             result.power = boost::math::cdf(norm, zval - zcutoff);
             result.dof = getTotalN();
@@ -407,7 +1428,7 @@ AnalysisResult calculatePower(int estimator_type, double cv = 0.0) {
             }
             
             result.se = std::sqrt(bvar);
-            double zval = std::abs(treatment_effect / result.se);
+            double zval = std::abs(te / result.se);
             
             double dofbw = getTotalClusterPeriods() - model->model.linear_predictor.P();
             if (dofbw < 1) dofbw = 1;
@@ -445,7 +1466,7 @@ AnalysisResult calculatePower(int estimator_type, double cv = 0.0) {
             }
             
             result.se = std::sqrt(bvar);
-            double tval = std::abs(treatment_effect / result.se);
+            double tval = std::abs(te / result.se);
             
             boost::math::students_t dist(dofkr);
             double tcutoff = boost::math::quantile(dist, 1.0 - alpha / 2.0);
@@ -481,7 +1502,7 @@ AnalysisResult calculatePower(int estimator_type, double cv = 0.0) {
             }
             
             result.se = std::sqrt(bvar);
-            double tval = std::abs(treatment_effect / result.se);
+            double tval = std::abs(te / result.se);
             
             boost::math::students_t dist(dofkr);
             double tcutoff = boost::math::quantile(dist, 1.0 - alpha / 2.0);
@@ -504,7 +1525,7 @@ AnalysisResult calculatePower(int estimator_type, double cv = 0.0) {
             }
             
             result.se = std::sqrt(bvar);
-            double zval = std::abs(treatment_effect / result.se);
+            double zval = std::abs(te / result.se);
             
             result.power = boost::math::cdf(norm, zval - zcutoff);
             result.dof = getTotalN();
@@ -537,7 +1558,7 @@ AnalysisResult calculatePower(int estimator_type, double cv = 0.0) {
     }
     
     result.se = std::sqrt(bvar);
-    double zval = std::abs(treatment_effect / result.se);
+    double zval = std::abs(te / result.se);
     
     result.power = boost::math::cdf(norm, zval - zcutoff);
     result.dof = getTotalN();
@@ -602,6 +1623,179 @@ AnalysisResult calculatePower(int estimator_type, double cv = 0.0) {
         }
     }
     
+OptimalSequenceWeightsResult calculateOptimalSequenceWeights(
+    const std::vector<double>& sequence_membership_dbl,
+    int max_iter = 100,
+    double tol = 1e-6
+) {
+    OptimalSequenceWeightsResult result;
+    result.valid = false;
+    result.iterations = 0;
+    
+    if (!model || !model_valid) {
+        result.error = "Model not initialized";
+        return result;
+    }
+    
+    try {
+        std::vector<int> sequence_membership(sequence_membership_dbl.size());
+        for (size_t i = 0; i < sequence_membership_dbl.size(); i++) {
+            sequence_membership[i] = static_cast<int>(sequence_membership_dbl[i]);
+        }
+
+        Eigen::MatrixXd X = model->model.linear_predictor.X();
+        Eigen::MatrixXd Sigma = model->matrix.Sigma();
+        
+        int n = X.rows();
+        int p = X.cols();
+        
+        if ((int)sequence_membership.size() != n) {
+            result.error = "sequence_membership size (" + 
+                std::to_string(sequence_membership.size()) + 
+                ") does not match data rows (" + std::to_string(n) + ")";
+            return result;
+        }
+        
+        // Find number of sequences
+        int n_seq = 0;
+        for (int i = 0; i < n; i++) {
+            if (sequence_membership[i] < 0) {
+                result.error = "Negative sequence index at position " + std::to_string(i);
+                return result;
+            }
+            if (sequence_membership[i] + 1 > n_seq) {
+                n_seq = sequence_membership[i] + 1;
+            }
+        }
+        
+        if (n_seq < 1) {
+            result.error = "No valid sequences found";
+            return result;
+        }
+        
+        // Contrast vector C: 1 in treatment effect position
+        int idx = include_intercept ? 1 : 0;
+        if (idx >= p) {
+            result.error = "Treatment effect index out of bounds";
+            return result;
+        }
+        
+        Eigen::VectorXd C = Eigen::VectorXd::Zero(p);
+        C(idx) = 1.0;
+        
+        // Compute L where L L' = Sigma^{-1}
+        Eigen::LLT<Eigen::MatrixXd> llt_sigma(Sigma);
+        if (llt_sigma.info() != Eigen::Success) {
+            result.error = "Cholesky decomposition of Sigma failed";
+            return result;
+        }
+        Eigen::MatrixXd Sigma_inv = llt_sigma.solve(Eigen::MatrixXd::Identity(n, n));
+        
+        Eigen::LLT<Eigen::MatrixXd> llt_sigma_inv(Sigma_inv);
+        if (llt_sigma_inv.info() != Eigen::Success) {
+            result.error = "Cholesky decomposition of Sigma^{-1} failed";
+            return result;
+        }
+        Eigen::MatrixXd L = llt_sigma_inv.matrixL();
+        
+        // A = X' L (dimension p x n) - NOTE: L not L'
+        Eigen::MatrixXd A = X.transpose() * L;
+        
+        // Initialize z: minimum norm solution to A z = C
+        Eigen::MatrixXd AAt = A * A.transpose();
+        Eigen::LLT<Eigen::MatrixXd> llt_AAt(AAt);
+        if (llt_AAt.info() != Eigen::Success) {
+            result.error = "Cholesky of A A' failed";
+            return result;
+        }
+        Eigen::VectorXd z = A.transpose() * llt_AAt.solve(C);
+        
+        // Sequence membership as Eigen vector
+        Eigen::VectorXi seq_mem(n);
+        for (int i = 0; i < n; i++) {
+            seq_mem(i) = sequence_membership[i];
+        }
+        
+        // IRLS iterations
+        Eigen::VectorXd z_old = z;
+        
+        for (int iter = 0; iter < max_iter; iter++) {
+            // Compute per-sequence norms ||z_s||
+            Eigen::VectorXd seq_norms = Eigen::VectorXd::Zero(n_seq);
+            for (int i = 0; i < n; i++) {
+                int s = seq_mem(i);
+                seq_norms(s) += z(i) * z(i);
+            }
+            seq_norms = seq_norms.array().sqrt();
+            
+            // Relative epsilon for numerical stability
+            double eps = 0.001 * seq_norms.mean();
+            if (eps < 1e-12) eps = 1e-12;
+            
+            // D diagonal: d(i) = ||z_{s(i)}|| + eps
+            Eigen::VectorXd d(n);
+            for (int i = 0; i < n; i++) {
+                int s = seq_mem(i);
+                d(i) = seq_norms(s) + eps;
+            }
+            
+            // z = D A' (A D A')^{-1} C
+            Eigen::MatrixXd DAt = d.asDiagonal() * A.transpose();
+            Eigen::MatrixXd ADAt = A * DAt;
+            
+            Eigen::LLT<Eigen::MatrixXd> llt_ADAt(ADAt);
+            if (llt_ADAt.info() != Eigen::Success) {
+                result.error = "Weighted matrix not positive definite at iteration " + 
+                    std::to_string(iter);
+                return result;
+            }
+            
+            z = DAt * llt_ADAt.solve(C);
+            
+            // Check convergence
+            double change = (z - z_old).norm() / (z_old.norm() + 1e-10);
+            z_old = z;
+            
+            result.iterations = iter + 1;
+            
+            if (change < tol) {
+                break;
+            }
+        }
+        
+        // Final weights are ||z_s||
+        Eigen::VectorXd weights = Eigen::VectorXd::Zero(n_seq);
+        for (int i = 0; i < n; i++) {
+            int s = seq_mem(i);
+            weights(s) += z(i) * z(i);
+        }
+        weights = weights.array().sqrt();
+        
+        // Normalize to sum to 1
+        double total = weights.sum();
+        if (total > 0) {
+            weights /= total;
+        } else {
+            weights.setConstant(1.0 / n_seq);
+        }
+        
+        result.weights.resize(n_seq);
+        for (int i = 0; i < n_seq; i++) {
+            result.weights[i] = weights(i);
+        }
+        
+        result.valid = true;
+        return result;
+        
+    } catch (const std::exception& e) {
+        result.error = std::string("Exception: ") + e.what();
+        return result;
+    } catch (...) {
+        result.error = "Unknown exception in calculateOptimalSequenceWeights";
+        return result;
+    }
+}
+
     // Getters for design info
     int getTotalN() const {
         if (!model_valid || data.rows() == 0) return 0;
@@ -644,14 +1838,20 @@ EMSCRIPTEN_BINDINGS(glmm_module) {
         .field("valid", &AnalysisResult::valid)
         .field("error", &AnalysisResult::error);
     
+    value_object<OptimalSequenceWeightsResult>("OptimalSequenceWeightsResult")
+        .field("weights", &OptimalSequenceWeightsResult::weights)
+        .field("valid", &OptimalSequenceWeightsResult::valid)
+        .field("error", &OptimalSequenceWeightsResult::error)
+        .field("iterations", &OptimalSequenceWeightsResult::iterations);
+    
     // Bind vector<double> for passing arrays
     register_vector<double>("VectorDouble");
-    
     // Bind the wrapper class
     class_<GLMMWrapper>("GLMMWrapper")
         .constructor<>()
         .function("initialize", &GLMMWrapper::initialize)
         .function("updateParameters", &GLMMWrapper::updateParameters)
+        .function("getCorrelationWarning", &GLMMWrapper::getCorrelationWarning) 
         .function("updateWeights", &GLMMWrapper::updateWeights)
         .function("setAlpha", &GLMMWrapper::setAlpha)
         .function("setTargetPower", &GLMMWrapper::setTargetPower)
@@ -659,6 +1859,7 @@ EMSCRIPTEN_BINDINGS(glmm_module) {
         .function("setIncludeIntercept", &GLMMWrapper::setIncludeIntercept)
         .function("calculatePower", &GLMMWrapper::calculatePower)
         .function("calculateOptimalWeights", &GLMMWrapper::calculateOptimalWeights)
+        .function("calculateOptimalSequenceWeights", &GLMMWrapper::calculateOptimalSequenceWeights)
         .function("getTotalN", &GLMMWrapper::getTotalN)
         .function("getTotalClusterPeriods", &GLMMWrapper::getTotalClusterPeriods)
         .function("getNClusters", &GLMMWrapper::getNClusters)
