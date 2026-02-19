@@ -16,7 +16,11 @@
     satterthwaite: 2,
     kenward_roger: 3,
     gee_independence: 4,
-    gee_independence_robust: 5
+    gee_independence_robust: 5,
+    gee_exchangeable: 6,
+    gee_exchangeable_ttest: 7,
+    design_effect: 8,
+    design_effect_ttest: 9
   };
 
   // Load the WASM module

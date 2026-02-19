@@ -541,8 +541,10 @@ const MathsInterface = {
   const corrStructure = options.correlationStructure ?? 'exchangeable';
   const samplingStructure = options.samplingStructure ?? 'cross_section';
   const outcomeType = options.outcomeType ?? 'continuous';
-  
-const hash = `${design.numSequences}-${design.numPeriods}-${structure}-${clusters}-${totalClusters}-${corrStructure}-${samplingStructure}-${outcomeType}`;
+  const meanClusterSize = options.meanClusterSize ?? 20;
+  const sampleSizeMode = options.sampleSizeMode ?? 'fixed';
+
+  const hash = `${design.numSequences}-${design.numPeriods}-${structure}-${clusters}-${totalClusters}-${corrStructure}-${samplingStructure}-${outcomeType}-${sampleSizeMode}-${meanClusterSize}`;
   
   console.log('_getDesignHash:', hash);
   return hash;
@@ -565,7 +567,9 @@ const hash = `${design.numSequences}-${design.numPeriods}-${structure}-${cluster
           const cell = grid[i][t];
           if (cell.status !== CellStatus.NOT_ENROLLED) {
             const isIntervention = cell.status === CellStatus.INTERVENTION ? 1 : 0;
-            const clusterPeriodSize = cell.sampleSize ?? options.meanClusterSize ?? 20;
+            const clusterPeriodSize = options.sampleSizeMode === "exact"
+  ? (cell.sampleSize ?? options.meanClusterSize ?? 20)
+  : (options.meanClusterSize ?? 20);
             
             const row = [
               clNumber,                    // cl: cluster number
@@ -582,7 +586,6 @@ const hash = `${design.numSequences}-${design.numPeriods}-${structure}-${cluster
         clNumber++;
       }
     }
-
     return data;
   },
 
@@ -1655,10 +1658,14 @@ const PowerWarning = ({ warning, selectedEstimator, designName }) => {
     kenward_roger: 'Kenward-Roger',
     gee_independence: 'GEE Independence',
     gee_independence_robust: 'GEE Independence Robust',
+    gee_exchangeable: 'GEE Exchangeable Robust',
+    gee_exchangeable_ttest: 'GEE Exchangeable Robust t-test',
+    design_effect: 'Design Effect',
+    design_effect_ttest: 'Design Effect t-test'
   };
   
-  const isRobust = selectedEstimator.includes('robust') || selectedEstimator === 'gee_independence_robust';
-  const isSmallSampleCorrected = ['satterthwaite', 'kenward_roger', 'mixed_model_ttest'].includes(selectedEstimator);
+  const isRobust = ['gee_exchangeable', 'gee_independence_robust', 'gee_exchangeable_ttest'].includes(selectedEstimator);
+  const isSmallSampleCorrected = ['satterthwaite', 'kenward_roger', 'mixed_model_ttest', 'gee_exchangeable_ttest', 'design_effect_ttest'].includes(selectedEstimator);
   
   return (
     <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 text-sm">
@@ -1680,10 +1687,10 @@ const PowerWarning = ({ warning, selectedEstimator, designName }) => {
           </p>
           <p className="text-amber-700">
             {!isSmallSampleCorrected && !isRobust && (
-              <>Consider using a small sample correction (Satterthwaite or Kenward-Roger) or robust covariance estimation (GEE Independence Robust) for more conservative estimates.</>
+              <>Consider using a small sample correction (Satterthwaite or Kenward-Roger) or robust covariance estimation (GEE Exchangeable Robust) for more conservative estimates.</>
             )}
             {isSmallSampleCorrected && !isRobust && (
-              <>You are using a small sample correction. Consider also comparing with robust covariance estimation (GEE Independence Robust).</>
+              <>You are using a small sample correction. Consider also comparing with robust covariance estimation (GEE Exchangeable Robust).</>
             )}
             {isRobust && !isSmallSampleCorrected && (
               <>You are using robust covariance estimation. Consider also comparing with small sample corrections (Satterthwaite or Kenward-Roger).</>
@@ -1702,7 +1709,7 @@ const CorrelationWarning = ({ warningCode }) => {
    console.log("CorrelationWarning rendered with:", warningCode);
   if (!warningCode || warningCode === 0) return null;
   
-  const isSevere = warningCode >= 2;
+  const isSevere = warningCode > 2;
   
   return (
     <div className={`${isSevere ? 'bg-red-50 border-red-300' : 'bg-amber-50 border-amber-300'} border rounded-xl p-4 text-sm`}>
@@ -1718,7 +1725,8 @@ const CorrelationWarning = ({ warningCode }) => {
             {warningCode === 1 && (
               <>
                 The specified ICC/IAC combination requires moderately high random effect variance 
-                in the underlying GLMM. Power calculations should be interpreted with some caution. {' '}
+                in the underlying GLMM. For binomial models this may mean differences in power for 
+                marginal (GLMM) and conditional (GEE) models, compare the estimators in the menu. {' '}
                 <a 
                   href="https://github.com/samuel-watson/ClusterApp2/blob/master/solver.md" 
                   target="_blank" 
@@ -1735,7 +1743,8 @@ const CorrelationWarning = ({ warningCode }) => {
                 This implies most individuals have near-deterministic outcomes (always respond 
                 or never respond), with the marginal prevalence arising from the population mix 
                 rather than individual-level uncertainty. Consider reducing IAC or increasing ICC 
-                for more realistic modelling assumptions. {' '}
+                for more realistic modelling assumptions. For binomial models this will mean differences in power for 
+                marginal (GLMM) and conditional (GEE) models, compare the estimators in the menu. {' '}
                 <a 
                   href="https://github.com/samuel-watson/ClusterApp2/blob/master/solver.md" 
                   target="_blank" 
@@ -2288,14 +2297,28 @@ const [rowWeights, setRowWeights] = useState(null);
 
   const weights = weightMode !== 'none' ? cachedWeights[activeIndex] || null : null;
   // List of all estimators for comparison
-const ESTIMATORS = [
-  { key: 'mixed_model', label: 'Mixed Model' },
-  { key: 'mixed_model_ttest', label: 'Mixed Model t-test' },
-  { key: 'satterthwaite', label: 'Satterthwaite' },
-  { key: 'kenward_roger', label: 'Kenward-Roger' },
-  { key: 'gee_independence', label: 'GEE Independence' },
-  { key: 'gee_independence_robust', label: 'GEE Independence Robust' },
-];
+const getEstimators = (outcomeType) => {
+  if (outcomeType === 'binary' || outcomeType === 'count') {
+    return [
+      { key: 'mixed_model', label: 'GLMM (Conditional)' },
+      { key: 'mixed_model_ttest', label: 'GLMM (Conditional), t-test' },
+      { key: 'satterthwaite', label: 'GLMM (Conditional), Satterthwaite' },
+      { key: 'kenward_roger', label: 'GLMM (Conditional), Kenward-Roger' },
+      { key: 'gee_exchangeable', label: 'GEE Exchangeable (Marginal; Robust)' },
+      { key: 'gee_exchangeable_ttest', label: 'GEE Exchangeable (Marginal; Robust), t-test' },
+      { key: 'design_effect', label: 'Design Effect'},
+      { key: 'design_effect_ttest', label: 'Design Effect, t-test'}
+    ];
+  }
+  // Gaussian - no GEE exchangeable distinction needed
+  return [
+    { key: 'mixed_model', label: 'Model-based' },
+    { key: 'mixed_model_ttest', label: 'Model-based, t-test' },
+    { key: 'satterthwaite', label: 'Satterthwaite' },
+    { key: 'kenward_roger', label: 'Kenward-Roger' },
+    { key: 'gee_independence_robust', label: 'GEE Independence Robust' },
+  ];
+};
 
 // Memoized power comparison across estimators
 const powerWarning = useMemo(() => {
@@ -2307,9 +2330,13 @@ const powerWarning = useMemo(() => {
   
   const currentEstimator = options.estimator;
   const d = designs[activeIndex];
+  const outcomeType = d.options.outcomeType || options.outcomeType || 'continuous';
+  const family = outcomeType === 'binary' ? 'binomial' 
+               : outcomeType === 'count' ? 'poisson' 
+               : 'gaussian';
   
-  // Calculate power for all other estimators
-  const otherPowers = ESTIMATORS
+  // Calculate power for all other estimators (filtered by family)
+  const otherPowers = getEstimators(outcomeType)
     .filter(e => e.key !== currentEstimator)
     .map(e => {
       const modifiedOptions = { ...d.options, estimator: e.key };
@@ -2338,7 +2365,7 @@ const powerWarning = useMemo(() => {
   }
   
   return null;
-}, [wasmLoaded, resultsStale, isCalculating, cachedResults, activeIndex, options.estimator, designs]);
+}, [wasmLoaded, resultsStale, isCalculating, cachedResults, activeIndex, options.estimator, options.outcomeType, designs]);
 
 const correlationWarning = useMemo(() => {
   if (!wasmLoaded || resultsStale || isCalculating) return 0;
@@ -2379,6 +2406,14 @@ const correlationWarning = useMemo(() => {
   useEffect(() => {
     setResultsStale(true);
   }, [designs]);
+
+  useEffect(() => {
+    const validEstimators = getEstimators(options.outcomeType).map(e => e.key);
+    
+    if (!validEstimators.includes(options.estimator)) {
+      updateOptions("estimator", "mixed_model");
+    }
+  }, [options.outcomeType]);
 
   const recalculateResults = useCallback(async () => {
   if (!MathsInterface.isReady()) {
@@ -3092,26 +3127,21 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
                   </div>
 
                   <div className="flex flex-col gap-1">
-                    <label className="text-xs text-slate-500">Estimator</label>
-                    <select
-                      value={options.estimator}
-                      onChange={(e) =>
-                        updateOptions("estimator", e.target.value)
-                      }
-                      className="px-2 py-1 text-sm border border-slate-300 rounded
-               focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    >
-                      <option value="mixed_model">Model-based</option>
-                      <option value="mixed_model_ttest">
-                        Model-based, t-test
-                      </option>
-                      <option value="satterthwaite">Satterthwaite</option>
-                      <option value="kenward_roger">Kenward-Roger</option>
-                      <option value="gee_independence_robust">
-                        GEE Independence Robust
-                      </option>
-                    </select>
-                  </div>
+  <label className="text-xs text-slate-500">Estimator</label>
+  <select
+    value={options.estimator}
+    onChange={(e) => updateOptions("estimator", e.target.value)}
+    className="px-2 py-1 text-sm border border-slate-300 rounded
+               focus:outline-none focus:ring-1 focus:ring-blue-500
+               w-auto"
+  >
+    {getEstimators(options.outcomeType).map(est => (
+      <option key={est.key} value={est.key}>
+        {est.label}
+      </option>
+    ))}
+  </select>
+</div>
 
                   {numPeriods > 1 && (
                     <>

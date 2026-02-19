@@ -42,6 +42,13 @@ struct MarginalMoments {
     double EYY_diff_v;     // E_u[(E_v[expit(...)])^2] - different individuals
 };
 
+// Structure to hold the three moments we need
+struct MarginalMomentsCohort {
+    double mean;
+    double EYY_same_period;    // For ICC
+    double EYY_same_ind_lag1;  // For within-individual correlation at lag 1
+};
+
 MarginalMoments computeMoments(double beta, double sigma_c, double sigma_p) {
     MarginalMoments m = {0.0, 0.0, 0.0};
     
@@ -85,6 +92,124 @@ MarginalMoments computeMoments(double beta, double sigma_c, double sigma_p) {
     return m;
 }
 
+// Compute moments with cluster decay and individual effect
+// decay_at_lag1: CAC for nested exchangeable, lambda for exponential decay
+MarginalMomentsCohort computeMomentsCohort(double beta, double sigma_c, double sigma_p, 
+                                            double decay_at_lag1) {
+    const double sqrt2 = std::sqrt(2.0);
+    const double inv_sqrt_pi = 1.0 / std::sqrt(M_PI);
+    
+    // Decompose cluster variance for lag 1 computation
+    // At lag 0 (same period): full sigma_c contributes
+    // At lag 1: sigma_c * sqrt(decay) contributes to covariance
+    double sigma_c_persistent = sigma_c * std::sqrt(decay_at_lag1);
+    double sigma_c_transient = sigma_c * std::sqrt(1.0 - decay_at_lag1);
+    
+    double mean_Y = 0.0;
+    double EYY_same_period = 0.0;   // Different individuals, same period -> ICC
+    double EYY_same_ind_lag1 = 0.0; // Same individual, lag 1 -> within-ind correlation
+    
+    // Loop over persistent cluster effect (shared across periods)
+    for (int i_u = 0; i_u < GH_N; i_u++) {
+        double u_perm = sqrt2 * sigma_c_persistent * gh_nodes[i_u];
+        double w_u = gh_weights[i_u];
+        
+        // E_{w,v}[expit(...)] where w is transient cluster, v is individual
+        double E_wv = 0.0;
+        double E_wv_sq = 0.0;  // For same-period correlation (different individuals)
+        
+        // Loop over transient cluster effect
+        for (int i_w = 0; i_w < GH_N; i_w++) {
+            double w_trans = (sigma_c_transient > 1e-10) ? 
+                             sqrt2 * sigma_c_transient * gh_nodes[i_w] : 0.0;
+            double w_w = (sigma_c_transient > 1e-10) ? gh_weights[i_w] : 1.0;
+            
+            // E_v[expit(...)] given u_perm and w_trans
+            double E_v = 0.0;
+            
+            for (int i_v = 0; i_v < GH_N; i_v++) {
+                double v = (sigma_p > 1e-10) ? sqrt2 * sigma_p * gh_nodes[i_v] : 0.0;
+                double w_v = (sigma_p > 1e-10) ? gh_weights[i_v] : 1.0;
+                
+                double p = expit(beta + u_perm + w_trans + v);
+                E_v += w_v * p;
+            }
+            if (sigma_p > 1e-10) E_v *= inv_sqrt_pi;
+            
+            E_wv += w_w * E_v;
+            E_wv_sq += w_w * E_v * E_v;  // (E_v)^2 for different individuals same period
+        }
+        if (sigma_c_transient > 1e-10) {
+            E_wv *= inv_sqrt_pi;
+            E_wv_sq *= inv_sqrt_pi;
+        }
+        
+        mean_Y += w_u * E_wv;
+        EYY_same_period += w_u * E_wv_sq;
+        
+        // For same individual at lag 1: shares u_perm and v, but different w
+        // E_{v}[(E_w[expit(...)])^2]
+        double E_v_of_Ew_sq = 0.0;
+        
+        for (int i_v = 0; i_v < GH_N; i_v++) {
+            double v = (sigma_p > 1e-10) ? sqrt2 * sigma_p * gh_nodes[i_v] : 0.0;
+            double w_v = (sigma_p > 1e-10) ? gh_weights[i_v] : 1.0;
+            
+            // E_w[expit(beta + u_perm + w + v)] given u_perm and v
+            double E_w = 0.0;
+            
+            for (int i_w = 0; i_w < GH_N; i_w++) {
+                double w_trans = (sigma_c_transient > 1e-10) ? 
+                                 sqrt2 * sigma_c_transient * gh_nodes[i_w] : 0.0;
+                double w_w = (sigma_c_transient > 1e-10) ? gh_weights[i_w] : 1.0;
+                
+                double p = expit(beta + u_perm + w_trans + v);
+                E_w += w_w * p;
+            }
+            if (sigma_c_transient > 1e-10) E_w *= inv_sqrt_pi;
+            
+            E_v_of_Ew_sq += w_v * E_w * E_w;
+        }
+        if (sigma_p > 1e-10) E_v_of_Ew_sq *= inv_sqrt_pi;
+        
+        EYY_same_ind_lag1 += w_u * E_v_of_Ew_sq;
+    }
+    
+    mean_Y *= inv_sqrt_pi;
+    EYY_same_period *= inv_sqrt_pi;
+    EYY_same_ind_lag1 *= inv_sqrt_pi;
+    
+    return {mean_Y, EYY_same_period, EYY_same_ind_lag1};
+}
+
+
+
+// Compute correlations
+struct CorrelationsCohort {
+    double icc;
+    double within_ind_lag1;
+    double iac;
+};
+
+CorrelationsCohort computeCorrelationsCohort(const MarginalMomentsCohort& m) {
+    double EY = m.mean;
+    double var_Y = EY * (1.0 - EY);
+    
+    if (var_Y < 1e-10) {
+        return {0.0, 0.0, 0.0};
+    }
+    
+    double icc = (m.EYY_same_period - EY * EY) / var_Y;
+    double within_ind = (m.EYY_same_ind_lag1 - EY * EY) / var_Y;
+    
+    double iac = 0.0;
+    if (icc < 1.0 - 1e-10) {
+        iac = (within_ind - icc) / (1.0 - icc);
+    }
+    
+    return {icc, within_ind, iac};
+}
+
 inline double computeCorr(double EYY, double EY) {
     double var_Y = EY * (1.0 - EY);
     if (var_Y < 1e-10) return 0.0;
@@ -115,96 +240,78 @@ int checkPlausibility(double sigma_c, double sigma_p) {
 
 
 SolverResult solveParametersCohortBinomial(double p0, double p1, double icc, double iac,
-                                    int max_iter = 100, double tol = 1e-7) {
-    // Better initial guesses using attenuation approximation
-    static const double c = 0.588;  // 16*sqrt(3)/(15*pi)
-    
-    // Rough estimate of total variance from ICC
-    // ICC ≈ sigma_c^2 / (sigma_c^2 + pi^2/3) for small sigma_p
+                                            double decay_at_lag1,
+                                            int max_iter = 150, double tol = 1e-6) {
+    static const double c = 0.588;
     static const double pi2_3 = M_PI * M_PI / 3.0;
+    
+    // Initial guesses
     double sigma_c_init = std::sqrt(icc * pi2_3 / (1.0 - icc + 0.01));
-    sigma_c_init = std::min(2.0, std::max(0.1, sigma_c_init));
+    sigma_c_init = std::max(0.1, std::min(2.0, sigma_c_init));
     
-    double sigma_p_init = std::sqrt(iac * pi2_3 / (1.0 - iac + 0.01)) * 0.5;
-    sigma_p_init = std::min(0.3, std::max(0.05, sigma_p_init));
+    // Target within-individual correlation at lag 1
+    double target_within_ind = decay_at_lag1 * icc + iac * (1.0 - icc);
     
-    // Attenuation factor
+    // Initial sigma_p based on target
+    double sigma_p_init = std::sqrt(std::max(0.01, iac * pi2_3 / (1.0 - iac + 0.01))) * 0.5;
+    sigma_p_init = std::max(0.05, std::min(2.0, sigma_p_init));
+    
     double V_total = sigma_c_init * sigma_c_init + sigma_p_init * sigma_p_init;
     double atten = std::sqrt(1.0 + c * c * V_total);
     
-    // Adjusted initial betas
     double beta0_init = std::log(p0 / (1.0 - p0)) * atten;
     double beta1_init = std::log(p1 / (1.0 - p1)) * atten - beta0_init;
     
-    EM_ASM({
-        console.log("Initial guesses: beta0=", $0, "beta1=", $1, "sigma_c=", $2, "sigma_p=", $3);
-    }, beta0_init, beta1_init, sigma_c_init, sigma_p_init);
-    
+    // params = {beta0, beta1, log_sigma_c, log_sigma_p}
     std::array<double, 4> params = {
-        beta0_init, 
-        beta1_init, 
-        std::log(sigma_c_init), 
+        beta0_init,
+        beta1_init,
+        std::log(sigma_c_init),
         std::log(sigma_p_init)
     };
     
-    const double sigma_min = 0.01;
-    const double sigma_max = 6.0;
-    const double log_sigma_min = -4.0;  // sigma = ~0.018
-    const double log_sigma_max = 4.0;   // sigma = ~55
-    const double beta_max = 8.0;
+    const double beta_max = 10.0;
+    const double log_sigma_min = -4.0;
+    const double log_sigma_max = 4.0;
     const double eps = 1e-5;
     
-    double lambda = 0.01;  // Levenberg-Marquardt damping
+    double lambda = 0.1;
     
     for (int iter = 0; iter < max_iter; iter++) {
         double sigma_c = std::exp(params[2]);
         double sigma_p = std::exp(params[3]);
-
-        auto m0 = computeMoments(params[0], sigma_c, sigma_p);
-        auto m1 = computeMoments(params[0] + params[1], sigma_c, sigma_p);
+        
+        auto m0 = computeMomentsCohort(params[0], sigma_c, sigma_p, decay_at_lag1);
+        auto m1 = computeMomentsCohort(params[0] + params[1], sigma_c, sigma_p, decay_at_lag1);
+        
+        auto corrs0 = computeCorrelationsCohort(m0);
         
         double curr_p0 = m0.mean;
         double curr_p1 = m1.mean;
-        double curr_icc = computeCorr(m0.EYY_diff_v, m0.mean);
-        double curr_within_ind = computeCorr(m0.EYY_same_v, m0.mean);
+        double curr_icc = corrs0.icc;
+        double curr_within_ind = corrs0.within_ind_lag1;
         
-        double curr_iac = 0.0;
-        if (curr_icc < 1.0 - 1e-10) {
-            curr_iac = (curr_within_ind - curr_icc) / (1.0 - curr_icc);
-        }
-        
+        // Residuals: match p0, p1, ICC, and within-individual correlation at lag 1
         std::array<double, 4> residuals = {
             p0 - curr_p0,
             p1 - curr_p1,
             icc - curr_icc,
-            iac - curr_iac
+            target_within_ind - curr_within_ind
         };
         
-        double max_resid = std::max({std::abs(residuals[0]), std::abs(residuals[1]),
-                                      std::abs(residuals[2]), std::abs(residuals[3])});
+        double sum_sq = residuals[0]*residuals[0] + residuals[1]*residuals[1] +
+                        residuals[2]*residuals[2] + residuals[3]*residuals[3];
+        double rms_resid = std::sqrt(sum_sq / 4.0);
         
-        if (iter % 10 == 0) {
+        if (iter % 20 == 0) {
             EM_ASM({
-                console.log("Iter", $0, ": resid=", $1, "params=", $2, $3, $4, $5);
-            }, iter, max_resid, params[0], params[1], params[2], params[3]);
+                console.log("Iter", $0, ": rms=", $1, "icc=", $2, "within_ind=", $3, 
+                            "sigma_c=", $4, "sigma_p=", $5);
+            }, iter, rms_resid, curr_icc, curr_within_ind, sigma_c, sigma_p);
         }
         
-        if (max_resid < tol) {
-            double sigma_c = std::exp(params[2]);
-            double sigma_p = std::exp(params[3]);
+        if (rms_resid < tol) {
             int warning = checkPlausibility(sigma_c, sigma_p);
-            
-            if (warning == 1) {
-                EM_ASM({
-                    console.warn("Correlation warning: moderately high random effect variance required.");
-                });
-            } else if (warning == 2) {
-                EM_ASM({
-                    console.warn("Correlation warning: extreme random effect variance (sigma_c=%f, sigma_p=%f).",
-                                $0, $1);
-                }, sigma_c, sigma_p);
-            }
-            
             return {params[0], params[1], sigma_c, sigma_p, true, iter, warning};
         }
         
@@ -214,27 +321,21 @@ SolverResult solveParametersCohortBinomial(double p0, double p1, double icc, dou
             std::array<double, 4> params_plus = params;
             double h = std::max(eps, std::abs(params[j]) * eps);
             params_plus[j] += h;
-
+            
             double sc_p = std::exp(params_plus[2]);
             double sp_p = std::exp(params_plus[3]);
             
-            // Clamp
-            //if (j >= 2) params_plus[j] = std::max(sigma_min, std::min(sigma_max, params_plus[j]));
-            
-            auto m0_p = computeMoments(params_plus[0], sc_p, sp_p);
-            auto m1_p = computeMoments(params_plus[0] + params_plus[1], sc_p, sp_p);
-            
-            double icc_p = computeCorr(m0_p.EYY_diff_v, m0_p.mean);
-            double within_p = computeCorr(m0_p.EYY_same_v, m0_p.mean);
-            double iac_p = (icc_p < 1.0 - 1e-10) ? (within_p - icc_p) / (1.0 - icc_p) : 0.0;
+            auto m0_p = computeMomentsCohort(params_plus[0], sc_p, sp_p, decay_at_lag1);
+            auto m1_p = computeMomentsCohort(params_plus[0] + params_plus[1], sc_p, sp_p, decay_at_lag1);
+            auto corrs0_p = computeCorrelationsCohort(m0_p);
             
             J[0][j] = (m0_p.mean - curr_p0) / h;
             J[1][j] = (m1_p.mean - curr_p1) / h;
-            J[2][j] = (icc_p - curr_icc) / h;
-            J[3][j] = (iac_p - curr_iac) / h;
+            J[2][j] = (corrs0_p.icc - curr_icc) / h;
+            J[3][j] = (corrs0_p.within_ind_lag1 - curr_within_ind) / h;
         }
         
-        // Levenberg-Marquardt: solve (J^T J + lambda * diag(J^T J)) * delta = J^T * r
+        // Levenberg-Marquardt
         std::array<std::array<double, 4>, 4> JTJ;
         std::array<double, 4> JTr;
         
@@ -243,107 +344,213 @@ SolverResult solveParametersCohortBinomial(double p0, double p1, double icc, dou
             for (int k = 0; k < 4; k++) {
                 JTr[i] += J[k][i] * residuals[k];
             }
-            for (int j = 0; j < 4; j++) {
-                JTJ[i][j] = 0.0;
+            for (int jj = 0; jj < 4; jj++) {
+                JTJ[i][jj] = 0.0;
                 for (int k = 0; k < 4; k++) {
-                    JTJ[i][j] += J[k][i] * J[k][j];
+                    JTJ[i][jj] += J[k][i] * J[k][jj];
                 }
             }
-            JTJ[i][i] *= (1.0 + lambda);  // Damping
+            JTJ[i][i] += lambda;
         }
         
-        // Solve 4x4 system
+        // Gaussian elimination
         std::array<std::array<double, 5>, 4> aug;
         for (int i = 0; i < 4; i++) {
-            for (int j = 0; j < 4; j++) {
-                aug[i][j] = JTJ[i][j];
-            }
+            for (int jj = 0; jj < 4; jj++) aug[i][jj] = JTJ[i][jj];
             aug[i][4] = JTr[i];
         }
         
         for (int col = 0; col < 4; col++) {
             int pivot = col;
             for (int row = col + 1; row < 4; row++) {
-                if (std::abs(aug[row][col]) > std::abs(aug[pivot][col])) {
-                    pivot = row;
-                }
+                if (std::abs(aug[row][col]) > std::abs(aug[pivot][col])) pivot = row;
             }
             std::swap(aug[col], aug[pivot]);
-            
-            if (std::abs(aug[col][col]) < 1e-12) {
-                aug[col][col] = 1e-12;
-            }
+            if (std::abs(aug[col][col]) < 1e-14) aug[col][col] = 1e-14;
             
             for (int row = col + 1; row < 4; row++) {
                 double factor = aug[row][col] / aug[col][col];
-                for (int k = col; k < 5; k++) {
-                    aug[row][k] -= factor * aug[col][k];
-                }
+                for (int k = col; k < 5; k++) aug[row][k] -= factor * aug[col][k];
             }
         }
         
         std::array<double, 4> delta = {0, 0, 0, 0};
         for (int i = 3; i >= 0; i--) {
             delta[i] = aug[i][4];
-            for (int j = i + 1; j < 4; j++) {
-                delta[i] -= aug[i][j] * delta[j];
-            }
-            if (std::abs(aug[i][i]) > 1e-12) {
-                delta[i] /= aug[i][i];
-            }
+            for (int jj = i + 1; jj < 4; jj++) delta[i] -= aug[i][jj] * delta[jj];
+            delta[i] /= aug[i][i];
         }
         
-        // Clamp step size
-        double max_delta = std::max({std::abs(delta[0]), std::abs(delta[1]),
-                                      std::abs(delta[2]), std::abs(delta[3])});
-        if (max_delta > 1.0) {
-            for (int i = 0; i < 4; i++) delta[i] /= max_delta;
+        // Trust region
+        double step_norm = std::sqrt(delta[0]*delta[0] + delta[1]*delta[1] +
+                                     delta[2]*delta[2] + delta[3]*delta[3]);
+        if (step_norm > 2.0) {
+            for (int i = 0; i < 4; i++) delta[i] *= 2.0 / step_norm;
         }
         
-        // Try step
-        std::array<double, 4> params_new = {
-            std::max(-beta_max, std::min(beta_max, params[0] + delta[0])),
-            std::max(-beta_max, std::min(beta_max, params[1] + delta[1])),
-            std::max(log_sigma_min, std::min(log_sigma_max, params[2] + delta[2])),
-            std::max(log_sigma_min, std::min(log_sigma_max, params[3] + delta[3]))
-        };
-
-        double sc_new = std::exp(params_new[2]);
-        double sp_new = std::exp(params_new[3]);
-
-        auto m0_new = computeMoments(params_new[0], sc_new, sp_new);
-        auto m1_new = computeMoments(params_new[0] + params_new[1], sc_new, sp_new);
-        double new_icc = computeCorr(m0_new.EYY_diff_v, m0_new.mean);
-        double new_within = computeCorr(m0_new.EYY_same_v, m0_new.mean);
-        double new_iac = (new_icc < 1.0 - 1e-10) ? (new_within - new_icc) / (1.0 - new_icc) : 0.0;
+        // Line search
+        double alpha = 1.0;
+        bool improved = false;
         
-        double new_max_resid = std::max({
-            std::abs(p0 - m0_new.mean),
-            std::abs(p1 - m1_new.mean),
-            std::abs(icc - new_icc),
-            std::abs(iac - new_iac)
-        });
+        for (int ls = 0; ls < 15; ls++) {
+            std::array<double, 4> params_new = {
+                std::max(-beta_max, std::min(beta_max, params[0] + alpha * delta[0])),
+                std::max(-beta_max, std::min(beta_max, params[1] + alpha * delta[1])),
+                std::max(log_sigma_min, std::min(log_sigma_max, params[2] + alpha * delta[2])),
+                std::max(log_sigma_min, std::min(log_sigma_max, params[3] + alpha * delta[3]))
+            };
+            
+            double sc_new = std::exp(params_new[2]);
+            double sp_new = std::exp(params_new[3]);
+            
+            auto m0_new = computeMomentsCohort(params_new[0], sc_new, sp_new, decay_at_lag1);
+            auto m1_new = computeMomentsCohort(params_new[0] + params_new[1], sc_new, sp_new, decay_at_lag1);
+            auto corrs_new = computeCorrelationsCohort(m0_new);
+            
+            double new_sum_sq = (p0 - m0_new.mean) * (p0 - m0_new.mean) +
+                                (p1 - m1_new.mean) * (p1 - m1_new.mean) +
+                                (icc - corrs_new.icc) * (icc - corrs_new.icc) +
+                                (target_within_ind - corrs_new.within_ind_lag1) * 
+                                (target_within_ind - corrs_new.within_ind_lag1);
+            
+            if (new_sum_sq < sum_sq) {
+                params = params_new;
+                improved = true;
+                lambda = std::max(1e-8, lambda * 0.7);
+                break;
+            }
+            alpha *= 0.5;
+        }
         
-        if (new_max_resid < max_resid) {
-            params = params_new;
-            lambda = std::max(1e-7, lambda * 0.5);  // Decrease damping
-        } else {
-            lambda = std::min(1e7, lambda * 2.0);   // Increase damping
+        if (!improved) {
+            lambda = std::min(1e6, lambda * 3.0);
         }
     }
     
-    
-    
     double sigma_c = std::exp(params[2]);
-double sigma_p = std::exp(params[3]);
+    double sigma_p = std::exp(params[3]);
+    int warning = 3;
+    
+    EM_ASM({
+        console.warn("Cohort solver did not converge.");
+    });
+    
+    return {params[0], params[1], sigma_c, sigma_p, false, max_iter, warning};
+}
 
-int warning = 3;  // Did not converge
+MarginalMomentsCohort computeMomentsCohortPoisson(double beta, double sigma_c, double sigma_p,
+                                                   double decay_at_lag1) {
+    const double sqrt2 = std::sqrt(2.0);
+    const double inv_sqrt_pi = 1.0 / std::sqrt(M_PI);
+    
+    double sigma_c_persistent = sigma_c * std::sqrt(decay_at_lag1);
+    double sigma_c_transient = sigma_c * std::sqrt(1.0 - decay_at_lag1);
+    
+    double mean_Y = 0.0;
+    double EYY_same_period = 0.0;
+    double EYY_same_ind_lag1 = 0.0;
+    
+    // Loop over persistent cluster effect
+    for (int i_u = 0; i_u < GH_N; i_u++) {
+        double u_perm = sqrt2 * sigma_c_persistent * gh_nodes[i_u];
+        double w_u = gh_weights[i_u];
+        
+        double E_wv = 0.0;
+        double E_wv_sq = 0.0;
+        
+        // Loop over transient cluster effect
+        for (int i_w = 0; i_w < GH_N; i_w++) {
+            double w_trans = (sigma_c_transient > 1e-10) ? 
+                             sqrt2 * sigma_c_transient * gh_nodes[i_w] : 0.0;
+            double w_w = (sigma_c_transient > 1e-10) ? gh_weights[i_w] : 1.0;
+            
+            double E_v = 0.0;
+            
+            for (int i_v = 0; i_v < GH_N; i_v++) {
+                double v = (sigma_p > 1e-10) ? sqrt2 * sigma_p * gh_nodes[i_v] : 0.0;
+                double w_v = (sigma_p > 1e-10) ? gh_weights[i_v] : 1.0;
+                
+                double mu = std::exp(beta + u_perm + w_trans + v);
+                E_v += w_v * mu;
+            }
+            if (sigma_p > 1e-10) E_v *= inv_sqrt_pi;
+            
+            E_wv += w_w * E_v;
+            E_wv_sq += w_w * E_v * E_v;
+        }
+        if (sigma_c_transient > 1e-10) {
+            E_wv *= inv_sqrt_pi;
+            E_wv_sq *= inv_sqrt_pi;
+        }
+        
+        mean_Y += w_u * E_wv;
+        EYY_same_period += w_u * E_wv_sq;
+        
+        // Same individual, different period: shares u_perm and v, different w
+        double E_v_of_Ew_sq = 0.0;
+        
+        for (int i_v = 0; i_v < GH_N; i_v++) {
+            double v = (sigma_p > 1e-10) ? sqrt2 * sigma_p * gh_nodes[i_v] : 0.0;
+            double w_v = (sigma_p > 1e-10) ? gh_weights[i_v] : 1.0;
+            
+            double E_w = 0.0;
+            
+            for (int i_w = 0; i_w < GH_N; i_w++) {
+                double w_trans = (sigma_c_transient > 1e-10) ? 
+                                 sqrt2 * sigma_c_transient * gh_nodes[i_w] : 0.0;
+                double w_w = (sigma_c_transient > 1e-10) ? gh_weights[i_w] : 1.0;
+                
+                double mu = std::exp(beta + u_perm + w_trans + v);
+                E_w += w_w * mu;
+            }
+            if (sigma_c_transient > 1e-10) E_w *= inv_sqrt_pi;
+            
+            E_v_of_Ew_sq += w_v * E_w * E_w;
+        }
+        if (sigma_p > 1e-10) E_v_of_Ew_sq *= inv_sqrt_pi;
+        
+        EYY_same_ind_lag1 += w_u * E_v_of_Ew_sq;
+    }
+    
+    mean_Y *= inv_sqrt_pi;
+    EYY_same_period *= inv_sqrt_pi;
+    EYY_same_ind_lag1 *= inv_sqrt_pi;
+    
+    return {mean_Y, EYY_same_period, EYY_same_ind_lag1};
+}
 
-EM_ASM({
-    console.warn("Correlation warning: solver did not converge for specified ICC/IAC.");
-}, warning, sigma_c, sigma_p);
-
-return {params[0], params[1], sigma_c, sigma_p, false, max_iter, warning};
+CorrelationsCohort computeCorrelationsCohortPoisson(const MarginalMomentsCohort& m) {
+    double EY = m.mean;
+    
+    // Poisson variance: Var(Y) = E[mu] + Var(mu) = E[Y] + E[Y^2] - E[Y]^2
+    // Here E[Y^2] corresponds to same individual same period = EYY_same_period when lag=0
+    // But we need E[mu^2], which is EYY_same_period (since for same individual same period, 
+    // Y*Y' shares everything)
+    
+    // Actually for correlation purposes with Poisson:
+    // Var(Y) = E[Y] + (E[mu^2] - E[mu]^2)
+    // For two observations Y, Y' with E[YY'] = E[mu*mu'], correlation is:
+    // Corr = (E[mu*mu'] - E[mu]^2) / Var(Y)
+    
+    double var_mu = m.EYY_same_period - EY * EY;  // Variance of mu (using same-period as proxy)
+    double var_Y = EY + var_mu;
+    
+    if (var_Y < 1e-10) {
+        return {0.0, 0.0, 0.0};
+    }
+    
+    // ICC: different individuals, same period
+    double icc = (m.EYY_same_period - EY * EY) / var_Y;
+    
+    // Within-individual at lag 1
+    double within_ind = (m.EYY_same_ind_lag1 - EY * EY) / var_Y;
+    
+    double iac = 0.0;
+    if (icc < 1.0 - 1e-10) {
+        iac = (within_ind - icc) / (1.0 - icc);
+    }
+    
+    return {icc, within_ind, iac};
 }
 
 MarginalMoments computeMomentsPoisson(double beta, double sigma_c, double sigma_p) {
@@ -396,21 +603,18 @@ inline double computeCorrPoisson(double EYY, double EY, double EY2_same_v) {
 }
 
 SolverResult solveParametersCohortPoisson(double mu0, double mu1, double icc, double iac,
+                                           double decay_at_lag1,
                                            int max_iter = 150, double tol = 1e-6) {
     // Initial guesses
-    // For log-normal RE: E[Y] = exp(beta + sigma^2/2)
-    // So beta = log(mu) - sigma^2/2
     double sigma_c_init = std::sqrt(std::max(0.01, icc * 0.5));
     double sigma_p_init = std::sqrt(std::max(0.01, iac * 0.3));
     
-    double V_total = sigma_c_init * sigma_c_init + sigma_p_init * sigma_p_init;
-    double beta0_init = std::log(mu0) - V_total / 2.0;
-    double beta1_init = std::log(mu1) - V_total / 2.0 - beta0_init;
+    double V_init = sigma_c_init * sigma_c_init + sigma_p_init * sigma_p_init;
+    double beta0_init = std::log(mu0) - V_init / 2.0;
+    double beta1_init = std::log(mu1) - V_init / 2.0 - beta0_init;
     
-    EM_ASM({
-        console.log("Poisson solver - Initial: beta0=", $0, "beta1=", $1, 
-                    "sigma_c=", $2, "sigma_p=", $3);
-    }, beta0_init, beta1_init, sigma_c_init, sigma_p_init);
+    // Target within-individual correlation at lag 1
+    double target_within_ind = decay_at_lag1 * icc + iac * (1.0 - icc);
     
     std::array<double, 4> params = {
         beta0_init,
@@ -430,24 +634,21 @@ SolverResult solveParametersCohortPoisson(double mu0, double mu1, double icc, do
         double sigma_c = std::exp(params[2]);
         double sigma_p = std::exp(params[3]);
         
-        auto m0 = computeMomentsPoisson(params[0], sigma_c, sigma_p);
-        auto m1 = computeMomentsPoisson(params[0] + params[1], sigma_c, sigma_p);
+        auto m0 = computeMomentsCohortPoisson(params[0], sigma_c, sigma_p, decay_at_lag1);
+        auto m1 = computeMomentsCohortPoisson(params[0] + params[1], sigma_c, sigma_p, decay_at_lag1);
+        
+        auto corrs0 = computeCorrelationsCohortPoisson(m0);
         
         double curr_mu0 = m0.mean;
         double curr_mu1 = m1.mean;
-        double curr_icc = computeCorrPoisson(m0.EYY_diff_v, m0.mean, m0.EYY_same_v);
-        double curr_within = computeCorrPoisson(m0.EYY_same_v, m0.mean, m0.EYY_same_v);
-        
-        double curr_iac = 0.0;
-        if (curr_icc < 1.0 - 1e-10) {
-            curr_iac = (curr_within - curr_icc) / (1.0 - curr_icc);
-        }
+        double curr_icc = corrs0.icc;
+        double curr_within_ind = corrs0.within_ind_lag1;
         
         std::array<double, 4> residuals = {
             mu0 - curr_mu0,
             mu1 - curr_mu1,
             icc - curr_icc,
-            iac - curr_iac
+            target_within_ind - curr_within_ind
         };
         
         double sum_sq = residuals[0]*residuals[0] + residuals[1]*residuals[1] +
@@ -456,18 +657,13 @@ SolverResult solveParametersCohortPoisson(double mu0, double mu1, double icc, do
         
         if (iter % 20 == 0) {
             EM_ASM({
-                console.log("Poisson Iter", $0, ": rms=", $1, "sigma_c=", $2, 
-                            "sigma_p=", $3, "icc=", $4, "iac=", $5);
-            }, iter, rms_resid, sigma_c, sigma_p, curr_icc, curr_iac);
+                console.log("Poisson Iter", $0, ": rms=", $1, "icc=", $2, 
+                            "within_ind=", $3, "sigma_c=", $4, "sigma_p=", $5);
+            }, iter, rms_resid, curr_icc, curr_within_ind, sigma_c, sigma_p);
         }
         
         if (rms_resid < tol) {
             int warning = checkPlausibility(sigma_c, sigma_p);
-            
-            EM_ASM({
-                console.log("Poisson solver converged at iter", $0);
-            }, iter);
-            
             return {params[0], params[1], sigma_c, sigma_p, true, iter, warning};
         }
         
@@ -481,17 +677,14 @@ SolverResult solveParametersCohortPoisson(double mu0, double mu1, double icc, do
             double sc_p = std::exp(params_plus[2]);
             double sp_p = std::exp(params_plus[3]);
             
-            auto m0_p = computeMomentsPoisson(params_plus[0], sc_p, sp_p);
-            auto m1_p = computeMomentsPoisson(params_plus[0] + params_plus[1], sc_p, sp_p);
-            
-            double icc_p = computeCorrPoisson(m0_p.EYY_diff_v, m0_p.mean, m0_p.EYY_same_v);
-            double within_p = computeCorrPoisson(m0_p.EYY_same_v, m0_p.mean, m0_p.EYY_same_v);
-            double iac_p = (icc_p < 1.0 - 1e-10) ? (within_p - icc_p) / (1.0 - icc_p) : 0.0;
+            auto m0_p = computeMomentsCohortPoisson(params_plus[0], sc_p, sp_p, decay_at_lag1);
+            auto m1_p = computeMomentsCohortPoisson(params_plus[0] + params_plus[1], sc_p, sp_p, decay_at_lag1);
+            auto corrs0_p = computeCorrelationsCohortPoisson(m0_p);
             
             J[0][j] = (m0_p.mean - curr_mu0) / h;
             J[1][j] = (m1_p.mean - curr_mu1) / h;
-            J[2][j] = (icc_p - curr_icc) / h;
-            J[3][j] = (iac_p - curr_iac) / h;
+            J[2][j] = (corrs0_p.icc - curr_icc) / h;
+            J[3][j] = (corrs0_p.within_ind_lag1 - curr_within_ind) / h;
         }
         
         // Levenberg-Marquardt
@@ -543,9 +736,8 @@ SolverResult solveParametersCohortPoisson(double mu0, double mu1, double icc, do
         // Trust region
         double step_norm = std::sqrt(delta[0]*delta[0] + delta[1]*delta[1] +
                                      delta[2]*delta[2] + delta[3]*delta[3]);
-        double max_step = 2.0;
-        if (step_norm > max_step) {
-            for (int i = 0; i < 4; i++) delta[i] *= max_step / step_norm;
+        if (step_norm > 2.0) {
+            for (int i = 0; i < 4; i++) delta[i] *= 2.0 / step_norm;
         }
         
         // Line search
@@ -563,16 +755,15 @@ SolverResult solveParametersCohortPoisson(double mu0, double mu1, double icc, do
             double sc_new = std::exp(params_new[2]);
             double sp_new = std::exp(params_new[3]);
             
-            auto m0_new = computeMomentsPoisson(params_new[0], sc_new, sp_new);
-            auto m1_new = computeMomentsPoisson(params_new[0] + params_new[1], sc_new, sp_new);
-            double new_icc = computeCorrPoisson(m0_new.EYY_diff_v, m0_new.mean, m0_new.EYY_same_v);
-            double new_within = computeCorrPoisson(m0_new.EYY_same_v, m0_new.mean, m0_new.EYY_same_v);
-            double new_iac = (new_icc < 1.0 - 1e-10) ? (new_within - new_icc) / (1.0 - new_icc) : 0.0;
+            auto m0_new = computeMomentsCohortPoisson(params_new[0], sc_new, sp_new, decay_at_lag1);
+            auto m1_new = computeMomentsCohortPoisson(params_new[0] + params_new[1], sc_new, sp_new, decay_at_lag1);
+            auto corrs_new = computeCorrelationsCohortPoisson(m0_new);
             
             double new_sum_sq = (mu0 - m0_new.mean) * (mu0 - m0_new.mean) +
                                 (mu1 - m1_new.mean) * (mu1 - m1_new.mean) +
-                                (icc - new_icc) * (icc - new_icc) +
-                                (iac - new_iac) * (iac - new_iac);
+                                (icc - corrs_new.icc) * (icc - corrs_new.icc) +
+                                (target_within_ind - corrs_new.within_ind_lag1) * 
+                                (target_within_ind - corrs_new.within_ind_lag1);
             
             if (new_sum_sq < sum_sq) {
                 params = params_new;
@@ -590,13 +781,12 @@ SolverResult solveParametersCohortPoisson(double mu0, double mu1, double icc, do
     
     double sigma_c = std::exp(params[2]);
     double sigma_p = std::exp(params[3]);
-    int warning = 3;
     
     EM_ASM({
-        console.warn("Poisson solver did not converge for specified ICC/IAC.");
+        console.warn("Poisson cohort solver did not converge.");
     });
     
-    return {params[0], params[1], sigma_c, sigma_p, false, max_iter, warning};
+    return {params[0], params[1], sigma_c, sigma_p, false, max_iter, 3};
 }
 
 SolverResult solveParametersCrossSectionalBinomial(double p0, double p1, double icc,
@@ -932,25 +1122,25 @@ SolverResult solveParametersCrossSectionalPoisson(double mu0, double mu1, double
 // Main entry point
 // Main entry point
 SolverResult solveGLMMParameters(double y0, double y1, double icc, double iac,
+                                  double decay_at_lag1,  // CAC or lambda
                                   const std::string& sampling_structure,
                                   const std::string& family) {
     bool is_cohort = (sampling_structure != "cross_section" && iac > 0.0);
     
     if (family == "binomial") {
         if (is_cohort) {
-            return solveParametersCohortBinomial(y0, y1, icc, iac);
+            return solveParametersCohortBinomial(y0, y1, icc, iac, decay_at_lag1);
         } else {
             return solveParametersCrossSectionalBinomial(y0, y1, icc);
         }
     } else if (family == "poisson") {
         if (is_cohort) {
-            return solveParametersCohortPoisson(y0, y1, icc, iac);
+            return solveParametersCohortPoisson(y0, y1, icc, iac, decay_at_lag1);
         } else {
             return solveParametersCrossSectionalPoisson(y0, y1, icc);
         }
     }
     
-    // Fallback - shouldn't reach here for non-Gaussian
     return {0, 0, 0, 0, false, 0, 3};
 }
 
@@ -972,7 +1162,12 @@ enum class Estimator {
     Satterthwaite = 2,
     KenwardRoger = 3,
     GEEIndependence = 4,
-    GEEIndependenceRobust = 5
+    GEEIndependenceRobust = 5,
+    GEEModel = 6,
+    GEEExchangeable = 6,        // NEW
+    GEEExchangeableTTest = 7,
+    DesignEffect = 8,
+    DesignEffectTTest = 9
 };
 
 struct OptimalSequenceWeightsResult {
@@ -1011,6 +1206,15 @@ private:
     std::string sampling_structure;
 
     int correlation_warning_ = 0;
+
+    // Stored correlation parameters for GEE
+    double stored_icc_ = 0.0;
+    double stored_iac_ = 0.0;
+    double stored_cac_or_lambda_ = 0.0;
+    double stored_mu0_ = 0.0;
+    double stored_mu1_ = 0.0;
+    double stored_mean_n_ = 1.0;
+    int stored_num_periods_ = 1;
 
 public:
     GLMMWrapper() 
@@ -1185,7 +1389,14 @@ bool updateParameters(double icc, double iac, double cac_or_lengthscale,
             if(family == "binomial"){
                 double p0 = std::exp(baseline) / (1.0 + std::exp(baseline));
                 double p1 = std::exp(baseline + te) / (1.0 + std::exp(baseline + te));
-                auto result = solveGLMMParameters(p0, p1, icc, iac, sampling_structure, family);
+                stored_icc_ = icc;
+                stored_iac_ = iac;
+                stored_cac_or_lambda_ = cac_or_lengthscale;
+                stored_mu0_ = p0;
+                stored_mu1_ = p1;
+                stored_mean_n_ = mean_n;
+                stored_num_periods_ = num_periods;
+                auto result = solveGLMMParameters(p0, p1, icc, iac, cac_or_lengthscale, sampling_structure, family);
                 correlation_warning_ = result.warning_code;
                 EM_ASM({
                     console.log("=== GLMM Solver Debug ===");
@@ -1223,7 +1434,14 @@ bool updateParameters(double icc, double iac, double cac_or_lengthscale,
             } else if (family == "poisson"){
                 double mu0 = std::exp(baseline);
                 double mu1 = std::exp(baseline + te);
-                auto result = solveGLMMParameters(mu0, mu1, icc, iac, sampling_structure, family);
+                auto result = solveGLMMParameters(mu0, mu1, icc, iac, cac_or_lengthscale, sampling_structure, family);
+                stored_icc_ = icc;
+                stored_iac_ = iac;
+                stored_cac_or_lambda_ = cac_or_lengthscale;
+                stored_mu0_ = mu0;
+                stored_mu1_ = mu1;
+                stored_mean_n_ = mean_n;
+                stored_num_periods_ = num_periods;
                 correlation_warning_ = result.warning_code;
                 EM_ASM({
                     console.log("=== GLMM Solver Debug ===");
@@ -1303,6 +1521,100 @@ bool updateParameters(double icc, double iac, double cac_or_lengthscale,
         last_error = std::string("updateParameters failed: ") + e.what();
         return false;
     }
+}
+
+// Corrected buildGEECovarianceMatrix - now returns V on probability scale
+// The calculatePower function will apply the link derivatives
+
+Eigen::MatrixXd buildGEECovarianceMatrix() {
+    int n_obs = data.rows();
+    Eigen::MatrixXd V = Eigen::MatrixXd::Zero(n_obs, n_obs);
+    
+    // Use totalvar = 1 (standardized scale) to match design effect formulas
+    // This is the approach used by Kasza/Hemming
+    // double totalvar = 1.0;
+    // In buildGEECovarianceMatrix:
+    double mu_bar = (stored_mu0_ + stored_mu1_) / 2.0;
+    double totalvar = mu_bar * (1.0 - mu_bar);  // p̄(1-p̄)
+    // Variance components on standardized scale
+    double sig2CP = stored_icc_ * totalvar;                              // Cluster-period variance
+    double sig2E = (1.0 - stored_iac_) * (totalvar - sig2CP);           // Residual variance  
+    double sig2 = sig2E / stored_mean_n_;                                // Residual per cluster-period mean
+    double sigindiv = (stored_iac_ > 0 && stored_iac_ < 1) 
+                    ? sig2E * stored_iac_ / ((1.0 - stored_iac_) * stored_mean_n_)
+                    : 0.0;                                               // Individual autocorrelation
+    
+    // Handle edge cases for IAC
+    if (stored_iac_ == 0) {
+        sig2E = totalvar - sig2CP;
+        sig2 = sig2E / stored_mean_n_;
+        sigindiv = 0.0;
+    } else if (stored_iac_ >= 1.0 - 1e-10) {
+        sig2E = 0.0;
+        sig2 = 0.0;
+        sigindiv = (totalvar - sig2CP) / stored_mean_n_;
+    }
+    
+    double r = stored_cac_or_lambda_;  // CAC or decay parameter
+    
+    EM_ASM({
+        console.log("=== GEE Variance Components (Kasza/Hemming style) ===");
+        console.log("totalvar:", $0);
+        console.log("sig2CP:", $1);
+        console.log("sig2E:", $2);
+        console.log("sig2:", $3);
+        console.log("sigindiv:", $4);
+        console.log("r (CAC):", $5);
+    }, totalvar, sig2CP, sig2E, sig2, sigindiv, r);
+    
+    // Build covariance matrix for cluster-period means
+    for (int i = 0; i < n_obs; i++) {
+        int cl_i = static_cast<int>(data(i, 0));
+        int t_i = static_cast<int>(data(i, 1));
+        
+        for (int j = i; j < n_obs; j++) {
+            int cl_j = static_cast<int>(data(j, 0));
+            int t_j = static_cast<int>(data(j, 1));
+            
+            double cov_ij = 0.0;
+            
+            if (cl_i != cl_j) {
+                // Different clusters: zero covariance
+                cov_ij = 0.0;
+            } else {
+                // Same cluster
+                int lag = std::abs(t_i - t_j);
+                
+                if (correlation_structure == "nested_exchangeable") {
+                    // Constant decay: Vi = sigindiv + diag(sig2 + (1-r)*sig2CP) + r*sig2CP
+                    if (lag == 0) {
+                        cov_ij = sigindiv + sig2 + sig2CP;
+                    } else {
+                        cov_ij = sigindiv + r * sig2CP;
+                    }
+                } else {
+                    // Exponential decay: Vi = sigindiv + diag(sig2) + sig2CP * r^lag
+                    if (lag == 0) {
+                        cov_ij = sigindiv + sig2 + sig2CP;
+                    } else {
+                        cov_ij = sigindiv + sig2CP * std::pow(r, lag);
+                    }
+                }
+            }
+            
+            V(i, j) = cov_ij;
+            V(j, i) = cov_ij;
+        }
+    }
+    
+    // Debug: print sample of V
+    EM_ASM({
+        console.log("=== V matrix (first cluster) ===");
+        console.log("V[0,0]:", $0, "V[0,1]:", $1);
+        console.log("Correlation:", $2);
+    }, V(0,0), V(0,1), V(0,1)/V(0,0));
+    
+    return V;
 }
 
     bool updateWeights(double mean_cluster_size) {
@@ -1564,6 +1876,259 @@ AnalysisResult calculatePower(int estimator_type, double cv = 0.0) {
     result.dof = getTotalN();
     result.ci_width = zcutoff * result.se;
     result.mde = (zcutoff + powercutoff) * result.se;
+}
+else if (est == Estimator::DesignEffect) {
+    Eigen::MatrixXd X = model->model.linear_predictor.X();
+    Eigen::MatrixXd V = buildGEECovarianceMatrix();
+    int n_obs = X.rows();
+    double delta = stored_mu1_ - stored_mu0_; 
+    // V is already on correct scale - no delta method needed
+    Eigen::MatrixXd Sigma_GEE = V;
+    
+    // Debug comparison
+    Eigen::MatrixXd Sigma_GLMM = model->matrix.Sigma();
+    EM_ASM({
+        console.log("=== Covariance comparison ===");
+        console.log("Sigma_GEE[0,0]:", $0, "Sigma_GLMM[0,0]:", $1, "ratio:", $2);
+        console.log("Sigma_GEE[0,1]:", $3, "Sigma_GLMM[0,1]:", $4, "ratio:", $5);
+    }, Sigma_GEE(0,0), Sigma_GLMM(0,0), Sigma_GEE(0,0)/Sigma_GLMM(0,0),
+       Sigma_GEE(0,1), Sigma_GLMM(0,1), Sigma_GEE(0,1)/Sigma_GLMM(0,1));
+    
+    // Apply CV correction if needed
+    if (cv > 0) {
+        double cv2 = cv * cv;
+        for (int i = 0; i < n_obs; i++) {
+            Sigma_GEE(i, i) *= (1.0 + cv2);
+        }
+    }
+    
+    Eigen::LLT<Eigen::MatrixXd> llt(Sigma_GEE);
+    if (llt.info() != Eigen::Success) {
+        result.error = "GEE covariance matrix not positive definite";
+        return result;
+    }
+    
+    Eigen::MatrixXd M_gee = X.transpose() * llt.solve(X);
+    Eigen::MatrixXd Minv = M_gee.llt().solve(Eigen::MatrixXd::Identity(M_gee.rows(), M_gee.cols()));
+    
+    // Compare with GLMM
+    Eigen::MatrixXd M_glmm = model->matrix.information_matrix();
+    Eigen::MatrixXd Minv_glmm = M_glmm.llt().solve(Eigen::MatrixXd::Identity(M_glmm.rows(), M_glmm.cols()));
+    
+    EM_ASM({
+        console.log("=== Final SE comparison ===");
+        console.log("GEE SE:", $0, "GLMM SE:", $1, "ratio:", $2);
+    }, std::sqrt(Minv(idx,idx)), std::sqrt(Minv_glmm(idx,idx)),
+       std::sqrt(Minv(idx,idx)) / std::sqrt(Minv_glmm(idx,idx)));
+    
+    double bvar = Minv(idx, idx);
+    if (std::isnan(bvar) || bvar <= 0) {
+        result.error = "Invalid GEE variance estimate";
+        return result;
+    }
+    
+    result.se = std::sqrt(bvar);
+    double zval = std::abs(delta / result.se);
+    
+    result.power = boost::math::cdf(norm, zval - zcutoff);
+    result.dof = getTotalN();
+    result.ci_width = zcutoff * result.se;
+    result.mde = (zcutoff + powercutoff) * result.se;
+}
+else if (est == Estimator::GEEExchangeable) {
+    Eigen::MatrixXd X = model->model.linear_predictor.X();
+    int n_obs = X.rows();
+    
+    // True covariance from GLMM (on linear predictor scale)
+    Eigen::MatrixXd Sigma_true = model->matrix.Sigma();
+    
+    // Build GEE working covariance on probability scale
+    Eigen::MatrixXd V_prob = buildGEECovarianceMatrix();
+    
+    // Transform to linear predictor scale via delta method
+    // Var(η) = (dη/dμ)² × Var(μ)
+    double mu_bar = (stored_mu0_ + stored_mu1_) / 2.0;
+    double deriv_inv;
+    if (family == "binomial") {
+        deriv_inv = 1.0 / (mu_bar * (1.0 - mu_bar));
+    } else if (family == "poisson") {
+        deriv_inv = 1.0 / mu_bar;
+    } else {
+        deriv_inv = 1.0;
+    }
+    Eigen::MatrixXd V_working = V_prob * (deriv_inv * deriv_inv);
+    
+    // Apply CV correction if needed
+    if (cv > 0) {
+        double cv2 = cv * cv;
+        for (int i = 0; i < n_obs; i++) {
+            V_working(i, i) *= (1.0 + cv2);
+            Sigma_true(i, i) *= (1.0 + cv2);
+        }
+    }
+    
+    // Model-based info matrix: M = X' V_working⁻¹ X
+    Eigen::LLT<Eigen::MatrixXd> llt_V(V_working);
+    if (llt_V.info() != Eigen::Success) {
+        result.error = "GEE working covariance not positive definite";
+        return result;
+    }
+    Eigen::MatrixXd V_inv_X = llt_V.solve(X);
+    Eigen::MatrixXd M = X.transpose() * V_inv_X;
+    Eigen::MatrixXd M_inv = M.llt().solve(Eigen::MatrixXd::Identity(M.rows(), M.cols()));
+    
+    // Meat of sandwich: X' V_working⁻¹ Σ_true V_working⁻¹ X
+    Eigen::MatrixXd meat = V_inv_X.transpose() * Sigma_true * V_inv_X;
+    
+    // Sandwich variance: M⁻¹ × meat × M⁻¹
+    Eigen::MatrixXd sandwich = M_inv * meat * M_inv;
+    
+    // Compare with GLMM and model-based GEE
+    Eigen::MatrixXd M_glmm = model->matrix.information_matrix();
+    Eigen::MatrixXd Minv_glmm = M_glmm.llt().solve(Eigen::MatrixXd::Identity(M_glmm.rows(), M_glmm.cols()));
+    
+    EM_ASM({
+        console.log("=== GEE Sandwich Variance ===");
+        console.log("V_working[0,0]:", $0, "Sigma_true[0,0]:", $1);
+        console.log("Model-based GEE Var(β₁):", $2, "SE:", $3);
+        console.log("Sandwich GEE Var(β₁):", $4, "SE:", $5);
+        console.log("GLMM Var(β₁):", $6, "SE:", $7);
+        console.log("Ratio sandwich/GLMM:", $8);
+    }, V_working(0,0), Sigma_true(0,0),
+       M_inv(idx,idx), std::sqrt(M_inv(idx,idx)),
+       sandwich(idx,idx), std::sqrt(sandwich(idx,idx)),
+       Minv_glmm(idx,idx), std::sqrt(Minv_glmm(idx,idx)),
+       std::sqrt(sandwich(idx,idx)) / std::sqrt(Minv_glmm(idx,idx)));
+    
+    double bvar = sandwich(idx, idx);
+    if (std::isnan(bvar) || bvar <= 0) {
+        result.error = "Invalid GEE sandwich variance";
+        return result;
+    }
+    
+    result.se = std::sqrt(bvar);
+    double zval = std::abs(te / result.se);
+    
+    result.power = boost::math::cdf(norm, zval - zcutoff);
+    result.dof = getTotalN();
+    result.ci_width = zcutoff * result.se;
+    result.mde = (zcutoff + powercutoff) * result.se;
+}
+else if (est == Estimator::GEEExchangeableTTest) {
+    Eigen::MatrixXd X = model->model.linear_predictor.X();
+    int n_obs = X.rows();
+    
+    // True covariance from GLMM (on linear predictor scale)
+    Eigen::MatrixXd Sigma_true = model->matrix.Sigma();
+    
+    // Build GEE working covariance on probability scale
+    Eigen::MatrixXd V_prob = buildGEECovarianceMatrix();
+    
+    // Transform to linear predictor scale via delta method
+    double mu_bar = (stored_mu0_ + stored_mu1_) / 2.0;
+    double deriv_inv;
+    if (family == "binomial") {
+        deriv_inv = 1.0 / (mu_bar * (1.0 - mu_bar));
+    } else if (family == "poisson") {
+        deriv_inv = 1.0 / mu_bar;
+    } else {
+        deriv_inv = 1.0;
+    }
+    Eigen::MatrixXd V_working = V_prob * (deriv_inv * deriv_inv);
+    
+    // Apply CV correction if needed
+    if (cv > 0) {
+        double cv2 = cv * cv;
+        for (int i = 0; i < n_obs; i++) {
+            V_working(i, i) *= (1.0 + cv2);
+            Sigma_true(i, i) *= (1.0 + cv2);
+        }
+    }
+    
+    // Model-based info matrix: M = X' V_working⁻¹ X
+    Eigen::LLT<Eigen::MatrixXd> llt_V(V_working);
+    if (llt_V.info() != Eigen::Success) {
+        result.error = "GEE working covariance not positive definite";
+        return result;
+    }
+    Eigen::MatrixXd V_inv_X = llt_V.solve(X);
+    Eigen::MatrixXd M = X.transpose() * V_inv_X;
+    Eigen::MatrixXd M_inv = M.llt().solve(Eigen::MatrixXd::Identity(M.rows(), M.cols()));
+    
+    // Meat of sandwich: X' V_working⁻¹ Σ_true V_working⁻¹ X
+    Eigen::MatrixXd meat = V_inv_X.transpose() * Sigma_true * V_inv_X;
+    
+    // Sandwich variance: M⁻¹ × meat × M⁻¹
+    Eigen::MatrixXd sandwich = M_inv * meat * M_inv;
+    
+    double bvar = sandwich(idx, idx);
+    if (std::isnan(bvar) || bvar <= 0) {
+        result.error = "Invalid GEE sandwich variance";
+        return result;
+    }
+    
+    result.se = std::sqrt(bvar);
+    double tval = std::abs(te / result.se);
+    
+    // Between-within degrees of freedom
+    double dofbw = getTotalClusterPeriods() - model->model.linear_predictor.P();
+    if (dofbw < 1) dofbw = 1;
+    
+    boost::math::students_t dist(dofbw);
+    double tcutoff = boost::math::quantile(dist, 1.0 - alpha / 2.0);
+    double tpowercutoff = boost::math::quantile(dist, target_power);
+    
+    result.power = boost::math::cdf(dist, tval - tcutoff);
+    result.dof = dofbw;
+    result.ci_width = tcutoff * result.se;
+    result.mde = (tcutoff + tpowercutoff) * result.se;
+}
+else if (est == Estimator::DesignEffectTTest) {
+    Eigen::MatrixXd X = model->model.linear_predictor.X();
+    Eigen::MatrixXd V = buildGEECovarianceMatrix();  // Kasza/Hemming style with totalvar = p̄(1-p̄)
+    int n_obs = X.rows();
+    
+    // Risk difference as effect measure
+    double delta = stored_mu1_ - stored_mu0_;
+    
+    // Apply CV correction if needed
+    if (cv > 0) {
+        double cv2 = cv * cv;
+        for (int i = 0; i < n_obs; i++) {
+            V(i, i) *= (1.0 + cv2);
+        }
+    }
+    
+    Eigen::LLT<Eigen::MatrixXd> llt(V);
+    if (llt.info() != Eigen::Success) {
+        result.error = "Design effect covariance matrix not positive definite";
+        return result;
+    }
+    
+    Eigen::MatrixXd M = X.transpose() * llt.solve(X);
+    Eigen::MatrixXd Minv = M.llt().solve(Eigen::MatrixXd::Identity(M.rows(), M.cols()));
+    
+    double bvar = Minv(idx, idx);
+    if (std::isnan(bvar) || bvar <= 0) {
+        result.error = "Invalid design effect variance";
+        return result;
+    }
+    
+    result.se = std::sqrt(bvar);
+    double tval = std::abs(delta / result.se);
+    
+    // Between-within degrees of freedom
+    double dofbw = getTotalClusterPeriods() - model->model.linear_predictor.P();
+    if (dofbw < 1) dofbw = 1;
+    
+    boost::math::students_t dist(dofbw);
+    double tcutoff = boost::math::quantile(dist, 1.0 - alpha / 2.0);
+    double tpowercutoff = boost::math::quantile(dist, target_power);
+    
+    result.power = boost::math::cdf(dist, tval - tcutoff);
+    result.dof = dofbw;
+    result.ci_width = tcutoff * result.se;
+    result.mde = (tcutoff + tpowercutoff) * result.se;
 }
         else {
             result.error = "Unknown estimator type";
