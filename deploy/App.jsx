@@ -2304,8 +2304,8 @@ const getEstimators = (outcomeType) => {
       { key: 'mixed_model_ttest', label: 'GLMM (Conditional), t-test' },
       { key: 'satterthwaite', label: 'GLMM (Conditional), Satterthwaite' },
       { key: 'kenward_roger', label: 'GLMM (Conditional), Kenward-Roger' },
-      { key: 'gee_exchangeable', label: 'GEE Exchangeable (Marginal; Robust)' },
-      { key: 'gee_exchangeable_ttest', label: 'GEE Exchangeable (Marginal; Robust), t-test' },
+      { key: 'gee_exchangeable', label: 'GEE (Marginal; Robust)' },
+      { key: 'gee_exchangeable_ttest', label: 'GEE (Marginal; Robust), t-test' },
       { key: 'design_effect', label: 'Design Effect'},
       { key: 'design_effect_ttest', label: 'Design Effect, t-test'}
     ];
