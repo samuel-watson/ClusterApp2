@@ -24,6 +24,7 @@ const {
   EstimatorType 
 } = window.WasmLoader;
 
+
 // === DATA MODEL ===
 
 const CellStatus = {
@@ -880,6 +881,95 @@ _transformToLinkScale(baseline, treatmentEffect, outcomeType) {
 },
 
   // === PUBLIC API ===
+
+  getVerificationBundle(design, options, designId = '_verify') {
+    if (!wasmReady) {
+        throw new Error('WASM not initialized');
+    }
+    
+    // Always use a dedicated ID and force a fresh build
+    const tempId = '_verify_export';
+    
+    // Clear any previous verification wrapper
+    const oldCached = this._modelCache.get(tempId);
+    if (oldCached && oldCached.wrapper) {
+        oldCached.wrapper.delete();
+        this._modelCache.delete(tempId);
+    }
+    
+    // This builds a fresh wrapper with current design + options
+    const wrapper = this._getWrapper(tempId, design, options);
+    
+    const estimatorCode = this._getEstimatorCode(options.estimator);
+    const cv = options.sampleSizeMode === 'exact' ? 0 : (options.cvClusterSize ?? 0);
+    
+    const raw = wrapper.getVerificationBundle(estimatorCode, cv);
+    
+    const convertMatrix = (me) => {
+        if (!me || me.rows === 0 || me.cols === 0) return null;
+        const size = me.data.size();
+        if (size !== me.rows * me.cols) {
+            console.warn(`Matrix dimension mismatch: ${me.rows}×${me.cols} but data has ${size} elements`);
+            return null;
+        }
+        const flatData = [];
+        for (let i = 0; i < size; i++) flatData.push(me.data.get(i));
+        const matrix = [];
+        for (let i = 0; i < me.rows; i++) {
+            matrix.push(flatData.slice(i * me.cols, (i + 1) * me.cols));
+        }
+        return { data: matrix, rows: me.rows, cols: me.cols, label: me.label };
+    };
+    
+    const convertVector = (v) => {
+        const arr = [];
+        for (let i = 0; i < v.size(); i++) arr.push(v.get(i));
+        return arr;
+    };
+    
+    const result = {
+        X: convertMatrix(raw.X),
+        Sigma: convertMatrix(raw.Sigma),
+        M: convertMatrix(raw.M),
+        Minv: convertMatrix(raw.Minv),
+        bread: convertMatrix(raw.bread),
+        meat: convertMatrix(raw.meat),
+        V_working: convertMatrix(raw.V_working),
+        Sigma_true: convertMatrix(raw.Sigma_true),
+        beta: convertVector(raw.beta),
+        theta: convertVector(raw.theta),
+        var_delta: raw.var_delta,
+        se: raw.se,
+        dof: raw.dof,
+        power: raw.power,
+        te: raw.te,
+        alpha: raw.alpha,
+        target_power: raw.target_power,
+        idx: raw.idx,
+        estimator_name: raw.estimator_name,
+        formula: raw.formula,
+        family: raw.family,
+        link: raw.link,
+        correlation_structure: raw.correlation_structure,
+        sampling_structure: raw.sampling_structure,
+        valid: raw.valid,
+        error: raw.error,
+        dataMatrix: this._generateDataMatrix(design, options),
+        numSequences: design.numSequences,
+        numPeriods: design.numPeriods,
+        totalClusters: design.getTotalClusters(),
+        clustersPerSequence: [...design._clustersPerSequence]
+    };
+    
+    // Clean up — don't leave verification wrapper in cache
+    const cached = this._modelCache.get(tempId);
+    if (cached && cached.wrapper) {
+        cached.wrapper.delete();
+    }
+    this._modelCache.delete(tempId);
+    
+    return result;
+},
 
   getCorrelationWarning(designId = 'default') {
   if (!wasmReady) {
@@ -2290,7 +2380,7 @@ const [rowWeights, setRowWeights] = useState(null);
   }))
 );
   const [wasmLoaded, setWasmLoaded] = useState(false);
-
+  const [isExporting, setIsExporting] = useState(false);  
   const activeDesign = designs[activeIndex];
   const design = activeDesign.design;
   const options = activeDesign.options;
@@ -3421,6 +3511,7 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
   <div className="flex gap-2">
     <button
       onClick={() => {
+        
         const exportData = designs.map((d) => ({
           name: d.name,
           design: d.design.toJSON(),
@@ -3485,6 +3576,53 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
     />
   </div>
 </div>
+{/* Verification Report Export */}
+    <div className="bg-white rounded-xl shadow-lg border border-slate-200 p-4">
+      <h2 className="text-sm font-semibold text-slate-700 mb-2">
+        Verification Report
+      </h2>
+      <p className="text-xs text-slate-500 mb-3">
+        Export a full computation audit with matrices, R verification
+        script, and documentation for regulatory review.
+      </p>
+      <button
+        onClick={async () => {
+  console.log('Export button clicked');
+  try {
+    setIsExporting(true);
+    console.log('About to call ReportGenerator');
+    console.log('ReportGenerator exists:', !!window.ReportGenerator);
+    console.log('generateBundle exists:', !!window.ReportGenerator?.generateBundle);
+    console.log(window.ReportGenerator.generateBundle.toString());
+    await window.ReportGenerator.generateBundle(
+      design, options, activeDesign.name
+    );
+    console.log('Export complete');
+  } catch (err) {
+    console.error('Export failed:', err);
+    console.error('Stack:', err.stack);
+    alert('Export failed: ' + err.message);
+  } finally {
+    setIsExporting(false);
+  }
+}}
+        disabled={isExporting || resultsStale}
+        className="w-full px-3 py-2 bg-blue-600 text-white rounded-lg text-sm
+                   font-medium hover:bg-blue-700 disabled:bg-slate-300
+                   transition-colors flex items-center justify-center gap-2"
+      >
+        {isExporting ? (
+          <><span className="animate-spin">⟳</span> Generating...</>
+        ) : (
+          '📦 Export Verification Bundle'
+        )}
+      </button>
+      {resultsStale && (
+        <p className="text-xs text-amber-600 mt-2">
+          Recalculate results before exporting.
+        </p>
+      )}
+    </div>
           </div>
         </div>
       </div>

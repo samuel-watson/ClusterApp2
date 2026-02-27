@@ -24,7 +24,9 @@
   };
 
   // Load the WASM module
-  async function loadWasm() {
+  let wasmHash = null;
+
+async function loadWasm() {
     if (wasmModule) return wasmModule;
     if (loadPromise) return loadPromise;
     
@@ -33,23 +35,37 @@
     loadPromise = new Promise(async (resolve, reject) => {
       try {
         if (typeof createGLMMModule === 'undefined') {
-          throw new Error('WASM module factory not found. Ensure glmm_wasm.js is loaded first.');
+          throw new Error('WASM module factory not found.');
         }
         
-        wasmModule = await createGLMMModule();
+        // Fetch the binary and hash it before instantiation
+        const wasmResponse = await fetch('glmm_wasm.wasm');
+        const wasmBytes = await wasmResponse.arrayBuffer();
+        const hashBuffer = await crypto.subtle.digest('SHA-256', wasmBytes);
+        wasmHash = Array.from(new Uint8Array(hashBuffer))
+          .map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 12);
+        
+        console.log('WASM hash:', wasmHash);
+        
+        wasmModule = await createGLMMModule({
+          wasmBinary: wasmBytes   // pass pre-fetched bytes so it doesn't fetch twice
+        });
         
         isLoading = false;
         console.log('GLMM WASM module loaded successfully');
         resolve(wasmModule);
       } catch (err) {
         isLoading = false;
-        console.error('Failed to load WASM module:', err);
         reject(err);
       }
     });
     
     return loadPromise;
-  }
+}
+
+function getWasmHash() {
+    return wasmHash;
+}
 
   // Check if module is loaded
   function isWasmLoaded() {
@@ -147,6 +163,62 @@ updateWeights(meanClusterSize) {
   return this.wrapper.updateWeights(meanClusterSize);
 }
 
+getVerificationBundle(estimator = 'mixed_model', cv = 0.0) {
+    if (!this.wrapper || !this.isInitialized) {
+        throw new Error('Model not initialized');
+    }
+    const estimatorCode = typeof estimator === 'string'
+        ? (EstimatorType[estimator] ?? 0)
+        : estimator;
+    
+    const raw = this.wrapper.getVerificationBundle(estimatorCode, cv);
+    
+    // Convert MatrixExport objects to JS-friendly format
+    const convertMatrix = (me) => {
+        if (!me || !me.data || me.rows === 0) return null;
+        const flatData = fromWasmVector(me.data);
+        // Reshape to 2D array
+        const matrix = [];
+        for (let i = 0; i < me.rows; i++) {
+            const row = [];
+            for (let j = 0; j < me.cols; j++) {
+                row.push(flatData[i * me.cols + j]);
+            }
+            matrix.push(row);
+        }
+        return { data: matrix, rows: me.rows, cols: me.cols, label: me.label };
+    };
+    
+    return {
+        X: convertMatrix(raw.X),
+        Sigma: convertMatrix(raw.Sigma),
+        M: convertMatrix(raw.M),
+        Minv: convertMatrix(raw.Minv),
+        bread: convertMatrix(raw.bread),
+        meat: convertMatrix(raw.meat),
+        V_working: convertMatrix(raw.V_working),
+        Sigma_true: convertMatrix(raw.Sigma_true),
+        beta: fromWasmVector(raw.beta),
+        theta: fromWasmVector(raw.theta),
+        var_delta: raw.var_delta,
+        se: raw.se,
+        dof: raw.dof,
+        power: raw.power,
+        te: raw.te,
+        alpha: raw.alpha,
+        target_power: raw.target_power,
+        idx: raw.idx,
+        estimator_name: raw.estimator_name,
+        formula: raw.formula,
+        family: raw.family,
+        link: raw.link,
+        correlation_structure: raw.correlation_structure,
+        sampling_structure: raw.sampling_structure,
+        valid: raw.valid,
+        error: raw.error
+    };
+}
+
 getCorrelationWarning() {
     if (!this.wrapper || !this.isInitialized) {
         return 0;
@@ -237,7 +309,8 @@ getCorrelationWarning() {
     toWasmVector,
     fromWasmVector,
     EstimatorType,
-    GLMMInterface
+    GLMMInterface,
+    getWasmHash
   };
 
 })(window);

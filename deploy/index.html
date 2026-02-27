@@ -4,7 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Cluster Trial Designer</title>
-    
+
+    <!-- Ajax-->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script> 
     
@@ -92,7 +95,7 @@
     
     <!-- Shared utilities exposed to global scope -->
     <script src="wasmLoader.global.js"></script>
-    
+    <script src="reportGenerator.js"></script> 
     <!-- Main application (JSX transformed by Babel) -->
     <script type="text/babel" src="App.jsx" async></script>
     

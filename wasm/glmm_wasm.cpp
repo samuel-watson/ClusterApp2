@@ -1155,6 +1155,50 @@ struct AnalysisResult {
     std::string error;
 };
 
+struct MatrixExport {
+    std::vector<double> data;   // row-major flat data
+    int rows;
+    int cols;
+    std::string label;
+};
+
+struct VerificationBundle {
+    // Design matrix
+    MatrixExport X;
+    // Covariance matrix (Sigma for GLMM, V for GEE/design-effect)
+    MatrixExport Sigma;
+    // Information matrix M = X'V^{-1}X
+    MatrixExport M;
+    // Inverse information matrix M^{-1}
+    MatrixExport Minv;
+    // For sandwich estimators:
+    MatrixExport bread;       // M^{-1} (bread = inverse of X'V_w^{-1}X)
+    MatrixExport meat;        // X'V_w^{-1} Sigma_true V_w^{-1} X
+    MatrixExport V_working;   // GEE working covariance
+    MatrixExport Sigma_true;  // True covariance
+    // Parameter vectors
+    std::vector<double> beta;
+    std::vector<double> theta;
+    // Scalar results
+    double var_delta;
+    double se;
+    double dof;
+    double power;
+    double te;                // treatment effect used
+    double alpha;
+    double target_power;
+    int idx;                  // treatment effect parameter index
+    // Metadata
+    std::string estimator_name;
+    std::string formula;
+    std::string family;
+    std::string link;
+    std::string correlation_structure;
+    std::string sampling_structure;
+    bool valid;
+    std::string error;
+};
+
 // Estimator types matching JavaScript
 enum class Estimator {
     MixedModel = 0,         // GLS with normal distribution
@@ -1215,6 +1259,20 @@ private:
     double stored_mu1_ = 0.0;
     double stored_mean_n_ = 1.0;
     int stored_num_periods_ = 1;
+
+    MatrixExport eigenToExport(const Eigen::MatrixXd& mat, const std::string& label) {
+    MatrixExport exp;
+    exp.rows = mat.rows();
+    exp.cols = mat.cols();
+    exp.label = label;
+    exp.data.resize(exp.rows * exp.cols);
+    for (int i = 0; i < exp.rows; i++) {
+        for (int j = 0; j < exp.cols; j++) {
+            exp.data[i * exp.cols + j] = mat(i, j);
+        }
+    }
+    return exp;
+}
 
 public:
     GLMMWrapper() 
@@ -2143,6 +2201,264 @@ else if (est == Estimator::DesignEffectTTest) {
         return result;
     }
 }
+
+VerificationBundle getVerificationBundle(int estimator_type, double cv = 0.0) {
+    VerificationBundle vb;
+    vb.valid = false;
+    vb.formula = formula;
+    vb.family = family;
+    vb.link = link;
+    vb.correlation_structure = correlation_structure;
+    vb.sampling_structure = sampling_structure;
+    vb.alpha = alpha;
+    vb.target_power = target_power;
+    vb.idx = include_intercept ? 1 : 0;
+    
+    if (!model || !model_valid) {
+        vb.error = "Model not initialized";
+        return vb;
+    }
+    
+    try {
+        // Extract beta and theta
+        auto& params = model->model.linear_predictor.parameters;
+        vb.beta.resize(params.size());
+        for (size_t i = 0; i < params.size(); i++) vb.beta[i] = params[i];
+        
+        auto& thetaVec = model->model.covariance.parameters_;
+        vb.theta.resize(thetaVec.size());
+        for (size_t i = 0; i < thetaVec.size(); i++) vb.theta[i] = thetaVec[i];
+        
+        vb.te = vb.beta.size() > (size_t)vb.idx ? vb.beta[vb.idx] : 0.0;
+        
+        // Design matrix X
+        Eigen::MatrixXd X = model->model.linear_predictor.X();
+        vb.X = eigenToExport(X, "design_matrix");
+        
+        // Branch by estimator
+        Estimator est = static_cast<Estimator>(estimator_type);
+        int idx = vb.idx;
+        
+        boost::math::normal_distribution<> norm(0.0, 1.0);
+        double zcutoff = boost::math::quantile(norm, 1.0 - alpha / 2.0);
+        double powercutoff = boost::math::quantile(norm, target_power);
+        
+        if (est == Estimator::MixedModel || est == Estimator::MixedModelTTest ||
+            est == Estimator::Satterthwaite || est == Estimator::KenwardRoger ||
+            est == Estimator::GEEIndependence) {
+            
+            // GLMM-based: Sigma from model
+            Eigen::MatrixXd Sigma = model->matrix.Sigma();
+            vb.Sigma = eigenToExport(Sigma, "covariance_matrix");
+            
+            Eigen::MatrixXd M = model->matrix.information_matrix();
+            vb.M = eigenToExport(M, "information_matrix");
+            
+            Eigen::MatrixXd Minv = M.llt().solve(
+                Eigen::MatrixXd::Identity(M.rows(), M.cols()));
+            Minv = applyCVCorrection(Minv, cv);
+            vb.Minv = eigenToExport(Minv, "inverse_information_matrix");
+            
+            vb.var_delta = Minv(idx, idx);
+            vb.se = std::sqrt(vb.var_delta);
+            vb.estimator_name = "glmm_model_based";
+            
+            if (est == Estimator::MixedModel || est == Estimator::GEEIndependence) {
+                double zval = std::abs(vb.te / vb.se);
+                vb.power = boost::math::cdf(norm, zval - zcutoff);
+                vb.dof = getTotalN();
+                vb.estimator_name = (est == Estimator::MixedModel) ? 
+                    "mixed_model" : "gee_independence";
+            } else if (est == Estimator::MixedModelTTest) {
+                double dofbw = getTotalClusterPeriods() - 
+                    model->model.linear_predictor.P();
+                if (dofbw < 1) dofbw = 1;
+                vb.dof = dofbw;
+                boost::math::students_t dist(dofbw);
+                double tcutoff = boost::math::quantile(dist, 1.0 - alpha / 2.0);
+                vb.power = boost::math::cdf(dist, 
+                    std::abs(vb.te / vb.se) - tcutoff);
+                vb.estimator_name = "mixed_model_ttest";
+            } else if (est == Estimator::Satterthwaite) {
+                double dofkr;
+                if (correlation_structure != "exchangeable" && 
+                    correlation_structure != "nested_exchangeable") {
+                    auto res = model->matrix.template 
+                        small_sample_correction<glmmr::SE::KRBoth, glmmr::IM::EIM>();
+                    dofkr = res.dof(idx) > 1 ? res.dof(idx) : 1.0;
+                } else {
+                    auto res = model->matrix.template 
+                        small_sample_correction<glmmr::SE::KR, glmmr::IM::EIM>();
+                    dofkr = res.dof(idx) > 1 ? res.dof(idx) : 1.0;
+                }
+                vb.dof = dofkr;
+                boost::math::students_t dist(dofkr);
+                double tcutoff = boost::math::quantile(dist, 1.0 - alpha / 2.0);
+                vb.power = dofkr > 1 ? boost::math::cdf(dist, 
+                    std::abs(vb.te / vb.se) - tcutoff) : 0.0;
+                vb.estimator_name = "satterthwaite";
+            } else if (est == Estimator::KenwardRoger) {
+                Eigen::MatrixXd KRcov;
+                double dofkr;
+                if (correlation_structure != "exchangeable" && 
+                    correlation_structure != "nested_exchangeable") {
+                    auto res = model->matrix.template 
+                        small_sample_correction<glmmr::SE::KRBoth, glmmr::IM::EIM>();
+                    dofkr = res.dof(idx) > 1 ? res.dof(idx) : 1.0;
+                    KRcov = res.vcov_beta;
+                } else {
+                    auto res = model->matrix.template 
+                        small_sample_correction<glmmr::SE::KR, glmmr::IM::EIM>();
+                    dofkr = res.dof(idx) > 1 ? res.dof(idx) : 1.0;
+                    KRcov = res.vcov_beta;
+                }
+                KRcov = applyCVCorrection(KRcov, cv);
+                vb.Minv = eigenToExport(KRcov, "kr_adjusted_covariance");
+                vb.var_delta = KRcov(idx, idx);
+                vb.se = std::sqrt(vb.var_delta);
+                vb.dof = dofkr;
+                boost::math::students_t dist(dofkr);
+                double tcutoff = boost::math::quantile(dist, 1.0 - alpha / 2.0);
+                vb.power = dofkr > 1 ? boost::math::cdf(dist, 
+                    std::abs(vb.te / vb.se) - tcutoff) : 0.0;
+                vb.estimator_name = "kenward_roger";
+            }
+        }
+        else if (est == Estimator::GEEIndependenceRobust) {
+            Eigen::MatrixXd X_mat = model->model.linear_predictor.X();
+            Eigen::MatrixXd Sigma = model->matrix.Sigma();
+            vb.Sigma = eigenToExport(Sigma, "true_covariance_sigma");
+            
+            if (cv > 0) {
+                Eigen::VectorXd W_diag = model->matrix.W.W();
+                double cv2 = cv * cv;
+                Sigma.diagonal() += cv2 * W_diag.array().inverse().matrix();
+            }
+            
+            Eigen::MatrixXd XtX1 = X_mat.transpose() * X_mat;
+            Eigen::MatrixXd XtX2 = X_mat.transpose() * Sigma * X_mat;
+            XtX1 = XtX1.llt().solve(
+                Eigen::MatrixXd::Identity(XtX1.rows(), XtX1.cols()));
+            
+            vb.bread = eigenToExport(XtX1, "bread_XtX_inv");
+            vb.meat = eigenToExport(XtX2, "meat_XtSigmaX");
+            
+            Eigen::MatrixXd sandwich = XtX1 * XtX2 * XtX1;
+            vb.Minv = eigenToExport(sandwich, "sandwich_variance");
+            vb.var_delta = sandwich(idx, idx);
+            vb.se = std::sqrt(vb.var_delta);
+            vb.dof = getTotalN();
+            
+            double zval = std::abs(vb.te / vb.se);
+            vb.power = boost::math::cdf(norm, zval - zcutoff);
+            vb.estimator_name = "gee_independence_robust";
+        }
+        else if (est == Estimator::GEEExchangeable || 
+                 est == Estimator::GEEExchangeableTTest) {
+            Eigen::MatrixXd X_mat = model->model.linear_predictor.X();
+            Eigen::MatrixXd Sigma_true = model->matrix.Sigma();
+            Eigen::MatrixXd V_prob = buildGEECovarianceMatrix();
+            
+            double mu_bar = (stored_mu0_ + stored_mu1_) / 2.0;
+            double deriv_inv = 1.0;
+            if (family == "binomial") deriv_inv = 1.0 / (mu_bar * (1.0 - mu_bar));
+            else if (family == "poisson") deriv_inv = 1.0 / mu_bar;
+            Eigen::MatrixXd V_work = V_prob * (deriv_inv * deriv_inv);
+            
+            if (cv > 0) {
+                double cv2 = cv * cv;
+                for (int i = 0; i < V_work.rows(); i++) {
+                    V_work(i, i) *= (1.0 + cv2);
+                    Sigma_true(i, i) *= (1.0 + cv2);
+                }
+            }
+            
+            vb.V_working = eigenToExport(V_work, "gee_working_covariance");
+            vb.Sigma_true = eigenToExport(Sigma_true, "true_covariance");
+            
+            Eigen::LLT<Eigen::MatrixXd> llt_V(V_work);
+            Eigen::MatrixXd V_inv_X = llt_V.solve(X_mat);
+            Eigen::MatrixXd M = X_mat.transpose() * V_inv_X;
+            Eigen::MatrixXd M_inv = M.llt().solve(
+                Eigen::MatrixXd::Identity(M.rows(), M.cols()));
+            Eigen::MatrixXd meat_mat = V_inv_X.transpose() * Sigma_true * V_inv_X;
+            Eigen::MatrixXd sandwich = M_inv * meat_mat * M_inv;
+            
+            vb.M = eigenToExport(M, "information_matrix");
+            vb.bread = eigenToExport(M_inv, "bread_M_inv");
+            vb.meat = eigenToExport(meat_mat, "meat_matrix");
+            vb.Minv = eigenToExport(sandwich, "sandwich_variance");
+            
+            vb.var_delta = sandwich(idx, idx);
+            vb.se = std::sqrt(vb.var_delta);
+            
+            if (est == Estimator::GEEExchangeable) {
+                double zval = std::abs(vb.te / vb.se);
+                vb.power = boost::math::cdf(norm, zval - zcutoff);
+                vb.dof = getTotalN();
+                vb.estimator_name = "gee_exchangeable";
+            } else {
+                double dofbw = getTotalClusterPeriods() - 
+                    model->model.linear_predictor.P();
+                if (dofbw < 1) dofbw = 1;
+                vb.dof = dofbw;
+                boost::math::students_t dist(dofbw);
+                double tcutoff = boost::math::quantile(dist, 1.0 - alpha / 2.0);
+                vb.power = boost::math::cdf(dist, 
+                    std::abs(vb.te / vb.se) - tcutoff);
+                vb.estimator_name = "gee_exchangeable_ttest";
+            }
+        }
+        else if (est == Estimator::DesignEffect || 
+                 est == Estimator::DesignEffectTTest) {
+            Eigen::MatrixXd X_mat = model->model.linear_predictor.X();
+            Eigen::MatrixXd V = buildGEECovarianceMatrix();
+            double delta = stored_mu1_ - stored_mu0_;
+            
+            if (cv > 0) {
+                double cv2 = cv * cv;
+                for (int i = 0; i < V.rows(); i++) V(i, i) *= (1.0 + cv2);
+            }
+            
+            vb.Sigma = eigenToExport(V, "design_effect_covariance");
+            
+            Eigen::LLT<Eigen::MatrixXd> llt(V);
+            Eigen::MatrixXd M = X_mat.transpose() * llt.solve(X_mat);
+            Eigen::MatrixXd Minv = M.llt().solve(
+                Eigen::MatrixXd::Identity(M.rows(), M.cols()));
+            
+            vb.M = eigenToExport(M, "information_matrix");
+            vb.Minv = eigenToExport(Minv, "inverse_information_matrix");
+            vb.var_delta = Minv(idx, idx);
+            vb.se = std::sqrt(vb.var_delta);
+            vb.te = delta;  // Override: design effect uses risk difference
+            
+            if (est == Estimator::DesignEffect) {
+                double zval = std::abs(delta / vb.se);
+                vb.power = boost::math::cdf(norm, zval - zcutoff);
+                vb.dof = getTotalN();
+                vb.estimator_name = "design_effect";
+            } else {
+                double dofbw = getTotalClusterPeriods() - 
+                    model->model.linear_predictor.P();
+                if (dofbw < 1) dofbw = 1;
+                vb.dof = dofbw;
+                boost::math::students_t dist(dofbw);
+                double tcutoff = boost::math::quantile(dist, 1.0 - alpha / 2.0);
+                vb.power = boost::math::cdf(dist, 
+                    std::abs(delta / vb.se) - tcutoff);
+                vb.estimator_name = "design_effect_ttest";
+            }
+        }
+        
+        vb.valid = true;
+        return vb;
+        
+    } catch (const std::exception& e) {
+        vb.error = std::string("getVerificationBundle failed: ") + e.what();
+        return vb;
+    }
+}
     
     // Calculate optimal weights
     std::vector<double> calculateOptimalWeights(int N = 100) {
@@ -2408,6 +2724,42 @@ EMSCRIPTEN_BINDINGS(glmm_module) {
         .field("valid", &OptimalSequenceWeightsResult::valid)
         .field("error", &OptimalSequenceWeightsResult::error)
         .field("iterations", &OptimalSequenceWeightsResult::iterations);
+
+    // New: MatrixExport
+    value_object<MatrixExport>("MatrixExport")
+        .field("data", &MatrixExport::data)
+        .field("rows", &MatrixExport::rows)
+        .field("cols", &MatrixExport::cols)
+        .field("label", &MatrixExport::label);
+    
+    // New: VerificationBundle
+    value_object<VerificationBundle>("VerificationBundle")
+        .field("X", &VerificationBundle::X)
+        .field("Sigma", &VerificationBundle::Sigma)
+        .field("M", &VerificationBundle::M)
+        .field("Minv", &VerificationBundle::Minv)
+        .field("bread", &VerificationBundle::bread)
+        .field("meat", &VerificationBundle::meat)
+        .field("V_working", &VerificationBundle::V_working)
+        .field("Sigma_true", &VerificationBundle::Sigma_true)
+        .field("beta", &VerificationBundle::beta)
+        .field("theta", &VerificationBundle::theta)
+        .field("var_delta", &VerificationBundle::var_delta)
+        .field("se", &VerificationBundle::se)
+        .field("dof", &VerificationBundle::dof)
+        .field("power", &VerificationBundle::power)
+        .field("te", &VerificationBundle::te)
+        .field("alpha", &VerificationBundle::alpha)
+        .field("target_power", &VerificationBundle::target_power)
+        .field("idx", &VerificationBundle::idx)
+        .field("estimator_name", &VerificationBundle::estimator_name)
+        .field("formula", &VerificationBundle::formula)
+        .field("family", &VerificationBundle::family)
+        .field("link", &VerificationBundle::link)
+        .field("correlation_structure", &VerificationBundle::correlation_structure)
+        .field("sampling_structure", &VerificationBundle::sampling_structure)
+        .field("valid", &VerificationBundle::valid)
+        .field("error", &VerificationBundle::error);
     
     // Bind vector<double> for passing arrays
     register_vector<double>("VectorDouble");
@@ -2433,5 +2785,7 @@ EMSCRIPTEN_BINDINGS(glmm_module) {
         .function("getLastError", &GLMMWrapper::getLastError)
         .function("getFormula", &GLMMWrapper::getFormula)
         .function("getDataRows", &GLMMWrapper::getDataRows)
-        .function("getDataCols", &GLMMWrapper::getDataCols);
+        .function("getDataCols", &GLMMWrapper::getDataCols)
+        .function("getVerificationBundle", &GLMMWrapper::getVerificationBundle);
+
 }
