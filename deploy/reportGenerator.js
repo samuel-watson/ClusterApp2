@@ -166,9 +166,187 @@ cat("Significance level (alpha):", alpha, "\\n")
 cat("Parameter index:", idx, "\\n\\n")
 `;
 
+if (bundle.family !== 'gaussian') {
+    script += `
+# ==========================================================
+# Gauss-Hermite verification of marginal moment mapping
+# This independently checks that the solved GLMM parameters
+# reproduce the target ICC, IAC, and baseline prevalence/rate
+# ==========================================================
+
+cat("\\n=== Marginal Moment Verification ===\\n\\n")
+
+# 7-point Gauss-Hermite nodes and weights
+gh_nodes <- c(-2.65196, -1.67355, -0.81629, 0.0, 0.81629, 1.67355, 2.65196)
+gh_weights <- c(0.00097, 0.05455, 0.42560, 0.81026, 0.42560, 0.05455, 0.00097)
+
+${bundle.family === 'binomial' ? `
+expit <- function(x) 1 / (1 + exp(-x))
+
+compute_moments <- function(beta, sigma_c, sigma_p) {
+    sqrt2 <- sqrt(2)
+    inv_sqrt_pi <- 1 / sqrt(pi)
+    
+    mean_Y <- 0
+    EYY_same_v <- 0   # E[expit(...)^2] — same individual
+    EYY_diff_v <- 0   # E[(E_v[expit(...)])^2] — different individuals
+    
+    for (i in seq_along(gh_nodes)) {
+        u <- sqrt2 * sigma_c * gh_nodes[i]
+        w_u <- gh_weights[i]
+        
+        if (sigma_p > 1e-10) {
+            inner_mean <- 0
+            inner_sq <- 0
+            for (j in seq_along(gh_nodes)) {
+                v <- sqrt2 * sigma_p * gh_nodes[j]
+                w_v <- gh_weights[j]
+                p <- expit(beta + u + v)
+                inner_mean <- inner_mean + w_v * p
+                inner_sq <- inner_sq + w_v * p * p
+            }
+            inner_mean <- inner_mean * inv_sqrt_pi
+            inner_sq <- inner_sq * inv_sqrt_pi
+        } else {
+            p <- expit(beta + u)
+            inner_mean <- p
+            inner_sq <- p * p
+        }
+        
+        mean_Y <- mean_Y + w_u * inner_mean
+        EYY_same_v <- EYY_same_v + w_u * inner_sq
+        EYY_diff_v <- EYY_diff_v + w_u * inner_mean^2
+    }
+    
+    mean_Y <- mean_Y * inv_sqrt_pi
+    EYY_same_v <- EYY_same_v * inv_sqrt_pi
+    EYY_diff_v <- EYY_diff_v * inv_sqrt_pi
+    
+    list(mean = mean_Y, EYY_same_v = EYY_same_v, EYY_diff_v = EYY_diff_v)
+}
+
+compute_icc <- function(EYY, mu) {
+    (EYY - mu^2) / (mu * (1 - mu))
+}
+` : `
+compute_moments_poisson <- function(beta, sigma_c, sigma_p) {
+    sqrt2 <- sqrt(2)
+    inv_sqrt_pi <- 1 / sqrt(pi)
+    
+    mean_Y <- 0
+    EYY_same_v <- 0
+    EYY_diff_v <- 0
+    
+    for (i in seq_along(gh_nodes)) {
+        u <- sqrt2 * sigma_c * gh_nodes[i]
+        w_u <- gh_weights[i]
+        
+        if (sigma_p > 1e-10) {
+            inner_mean <- 0
+            inner_sq <- 0
+            for (j in seq_along(gh_nodes)) {
+                v <- sqrt2 * sigma_p * gh_nodes[j]
+                w_v <- gh_weights[j]
+                mu <- exp(beta + u + v)
+                inner_mean <- inner_mean + w_v * mu
+                inner_sq <- inner_sq + w_v * mu^2
+            }
+            inner_mean <- inner_mean * inv_sqrt_pi
+            inner_sq <- inner_sq * inv_sqrt_pi
+        } else {
+            mu <- exp(beta + u)
+            inner_mean <- mu
+            inner_sq <- mu^2
+        }
+        
+        mean_Y <- mean_Y + w_u * inner_mean
+        EYY_same_v <- EYY_same_v + w_u * inner_sq
+        EYY_diff_v <- EYY_diff_v + w_u * inner_mean^2
+    }
+    
+    mean_Y <- mean_Y * inv_sqrt_pi
+    EYY_same_v <- EYY_same_v * inv_sqrt_pi
+    EYY_diff_v <- EYY_diff_v * inv_sqrt_pi
+    
+    list(mean = mean_Y, EYY_same_v = EYY_same_v, EYY_diff_v = EYY_diff_v)
+}
+
+compute_icc_poisson <- function(EYY_diff, mu, EYY_same) {
+    (EYY_diff - mu^2) / (EYY_same - mu^2)
+}
+`}
+
+# Solved parameters
+beta0 <- ${bundle.beta[0]}
+beta1 <- ${bundle.beta[1]}
+sigma_c <- ${bundle.raw_sigma_c?.toFixed(10) ?? 0}
+sigma_p <- ${bundle.raw_sigma_p?.toFixed(10) ?? 0}
+
+cat("Solved parameters:\\n")
+cat("  beta0 (intercept):", beta0, "\\n")
+cat("  beta1 (treatment):", beta1, "\\n")
+cat("  sigma_c:", sigma_c, "\\n")
+cat("  sigma_p:", sigma_p, "\\n")
+cat("  sigma_c^2:", sigma_c^2, "\\n")
+cat("  sigma_p^2:", sigma_p^2, "\\n")
+cat("  Total RE var:", sigma_c^2 + sigma_p^2, "\\n\\n")
+
+# Forward computation
+${bundle.family === 'binomial' ? `
+m0 <- compute_moments(beta0, sigma_c, sigma_p)
+m1 <- compute_moments(beta0 + beta1, sigma_c, sigma_p)
+
+achieved_p0 <- m0$mean
+achieved_p1 <- m1$mean
+achieved_icc <- compute_icc(m0$EYY_diff_v, m0$mean)
+within_corr <- compute_icc(m0$EYY_same_v, m0$mean)
+achieved_iac <- if (achieved_icc < 1 - 1e-10) (within_corr - achieved_icc) / (1 - achieved_icc) else 0
+` : `
+m0 <- compute_moments_poisson(beta0, sigma_c, sigma_p)
+m1 <- compute_moments_poisson(beta0 + beta1, sigma_c, sigma_p)
+
+achieved_p0 <- m0$mean
+achieved_p1 <- m1$mean
+achieved_icc <- compute_icc_poisson(m0$EYY_diff_v, m0$mean, m0$EYY_same_v)
+within_corr <- compute_icc_poisson(m0$EYY_same_v, m0$mean, m0$EYY_same_v)
+achieved_iac <- if (achieved_icc < 1 - 1e-10) (within_corr - achieved_icc) / (1 - achieved_icc) else 0
+`}
+
+target_p0 <- ${bundle.target_baseline}
+target_p1 <- ${bundle.target_baseline_trt}
+target_icc <- ${bundle.target_icc}
+target_iac <- ${bundle.target_iac ?? 0}
+
+cat("Target vs achieved marginal moments:\\n")
+cat(sprintf("  %-20s  Target: %8.6f  Achieved: %8.6f  Residual: %.2e\\n",
+    "${bundle.family === 'binomial' ? 'Prevalence (ctrl)' : 'Rate (ctrl)'}", 
+    target_p0, achieved_p0, abs(target_p0 - achieved_p0)))
+cat(sprintf("  %-20s  Target: %8.6f  Achieved: %8.6f  Residual: %.2e\\n",
+    "${bundle.family === 'binomial' ? 'Prevalence (trt)' : 'Rate (trt)'}",
+    target_p1, achieved_p1, abs(target_p1 - achieved_p1)))
+cat(sprintf("  %-20s  Target: %8.6f  Achieved: %8.6f  Residual: %.2e\\n",
+    "ICC", target_icc, achieved_icc, abs(target_icc - achieved_icc)))
+cat(sprintf("  %-20s  Target: %8.6f  Achieved: %8.6f  Residual: %.2e\\n",
+    "IAC", target_iac, achieved_iac, abs(target_iac - achieved_iac)))
+
+tol <- 1e-3
+moment_ok <- (abs(target_p0 - achieved_p0) < tol &&
+              abs(target_icc - achieved_icc) < tol)
+
+if (moment_ok) {
+    cat("\\n*** MOMENT VERIFICATION PASSED ***\\n\\n")
+} else {
+    cat("\\n*** MOMENT VERIFICATION DISCREPANCY ***\\n")
+    cat("The solver residuals exceed tolerance. Check parameter settings.\\n\\n")
+}
+`;
+}
+
         if (isSandwich && bundle.V_working) {
             // Sandwich estimator
             script += `
+
+    
 # --- Sandwich variance estimator ---
 # Bread: M^{-1} where M = X' V_w^{-1} X
 V_inv_X <- solve(V_working, X)
@@ -337,6 +515,9 @@ if (abs(se_delta - ${bundle.se}) < 1e-4 && abs(power - ${bundle.power}) < 1e-3) 
     .result-box { background: #eff6ff; border: 2px solid #3b82f6; border-radius: 8px;
                   padding: 20px; margin: 1em 0; }
     .result-box .power { font-size: 2em; font-weight: 700; color: #1e40af; }
+    .warning-box { background: #fef3c7; border: 1px solid #f59e0b; border-radius: 6px;
+               padding: 12px; margin: 1em 0; font-size: 0.9em; }
+.warning-box strong { color: #92400e; }
     table { border-collapse: collapse; margin: 1em 0; }
     th, td { border: 1px solid #cbd5e1; padding: 6px 12px; text-align: center; }
     th { background: #f1f5f9; font-weight: 600; }
@@ -422,6 +603,8 @@ ${bundle.totalClusters} total clusters
     <tr><td>Target power</td><td>${options.targetPower}</td></tr>
 </table>
 
+
+
 <h3>Model parameters (${bundle.link} scale)</h3>
 <p class="note">The model is parameterised on the ${bundle.link} scale. 
 For non-Gaussian families, β and θ are solved numerically to match the 
@@ -497,6 +680,85 @@ very different random effect variances depending on the baseline prevalence/rate
         }, 0).toFixed(4)}</td></tr>
     <tr><td>π²/3 (logistic variance)</td><td>${(Math.PI * Math.PI / 3).toFixed(4)}</td></tr>
 </table>
+` : ''}
+
+${bundle.family !== 'gaussian' ? `
+<h3>Marginal moment verification</h3>
+<p class="note">For ${bundle.family} models the relationship between marginal 
+correlations (ICC, IAC) and GLMM variance components is nonlinear. The solver 
+finds β and σ on the ${bundle.link} scale such that the implied marginal moments 
+— computed via Gauss–Hermite quadrature — match the user-specified targets. 
+This is the source of divergence from design-effect approaches, which work 
+directly on the probability scale and do not account for the non-collapsibility 
+of the ${bundle.link} link.</p>
+
+<table class="param-table">
+    <tr><th>Quantity</th><th>Target</th><th>Achieved</th><th>Residual</th></tr>
+    <tr>
+        <td>${bundle.family === 'binomial' ? 'Control prevalence (p₀)' : 'Control rate (μ₀)'}</td>
+        <td>${bundle.target_baseline?.toFixed(6) ?? '—'}</td>
+        <td>${bundle.achieved_baseline?.toFixed(6) ?? '—'}</td>
+        <td>${bundle.target_baseline != null 
+            ? Math.abs(bundle.target_baseline - bundle.achieved_baseline).toExponential(2) 
+            : '—'}</td>
+    </tr>
+    <tr>
+        <td>${bundle.family === 'binomial' ? 'Treatment prevalence (p₁)' : 'Treatment rate (μ₁)'}</td>
+        <td>${bundle.target_baseline_trt?.toFixed(6) ?? '—'}</td>
+        <td>${bundle.achieved_baseline_trt?.toFixed(6) ?? '—'}</td>
+        <td>${bundle.target_baseline_trt != null 
+            ? Math.abs(bundle.target_baseline_trt - bundle.achieved_baseline_trt).toExponential(2) 
+            : '—'}</td>
+    </tr>
+    <tr>
+        <td>ICC (marginal)</td>
+        <td>${bundle.target_icc?.toFixed(6) ?? '—'}</td>
+        <td>${bundle.achieved_icc?.toFixed(6) ?? '—'}</td>
+        <td>${bundle.target_icc != null 
+            ? Math.abs(bundle.target_icc - bundle.achieved_icc).toExponential(2) 
+            : '—'}</td>
+    </tr>
+    ${bundle.target_iac > 0 ? `
+    <tr>
+        <td>IAC (marginal)</td>
+        <td>${bundle.target_iac?.toFixed(6) ?? '—'}</td>
+        <td>${bundle.achieved_iac?.toFixed(6) ?? '—'}</td>
+        <td>${bundle.target_iac != null 
+            ? Math.abs(bundle.target_iac - bundle.achieved_iac).toExponential(2) 
+            : '—'}</td>
+    </tr>` : ''}
+</table>
+
+<h3>Solved variance components (${bundle.link} scale)</h3>
+<table class="param-table">
+    <tr><th>Component</th><th>Value</th><th>Description</th></tr>
+    <tr><td>σ<sub>c</sub></td><td>${bundle.raw_sigma_c?.toFixed(6) ?? '—'}</td>
+        <td>Cluster-level SD on ${bundle.link} scale</td></tr>
+    ${bundle.raw_sigma_p > 0 ? `
+    <tr><td>σ<sub>p</sub></td><td>${bundle.raw_sigma_p?.toFixed(6) ?? '—'}</td>
+        <td>Individual-level SD on ${bundle.link} scale</td></tr>` : ''}
+    <tr><td>σ²<sub>c</sub></td><td>${bundle.raw_sigma_c != null 
+        ? (bundle.raw_sigma_c * bundle.raw_sigma_c).toFixed(6) : '—'}</td>
+        <td>Cluster variance</td></tr>
+    ${bundle.raw_sigma_p > 0 ? `
+    <tr><td>σ²<sub>p</sub></td><td>${bundle.raw_sigma_p != null 
+        ? (bundle.raw_sigma_p * bundle.raw_sigma_p).toFixed(6) : '—'}</td>
+        <td>Individual variance</td></tr>
+    <tr><td>σ²<sub>c</sub> + σ²<sub>p</sub></td>
+        <td>${(bundle.raw_sigma_c * bundle.raw_sigma_c + 
+               bundle.raw_sigma_p * bundle.raw_sigma_p).toFixed(6)}</td>
+        <td>Total RE variance (cf. π²/3 ≈ ${(Math.PI*Math.PI/3).toFixed(4)} for logistic)</td></tr>` : ''}
+</table>
+
+${bundle.correlation_warning > 0 ? `
+<div class="warning-box">
+    <strong>⚠ Correlation warning (level ${bundle.correlation_warning})</strong>
+    <p>${bundle.correlation_warning === 1 
+        ? 'The specified ICC/IAC requires moderately high random effect variance. The conditional (GLMM) and marginal (GEE/design effect) models may give substantially different power estimates.'
+        : bundle.correlation_warning === 2 
+        ? 'The specified ICC/IAC requires extreme random effect variance, implying most individuals have near-deterministic outcomes. Consider comparing GLMM and design effect estimators.'
+        : 'The solver could not fully match the target correlations. Power estimates may be unreliable.'}</p>
+</div>` : ''}
 ` : ''}
 
 <h3>Variance of treatment effect estimator</h3>

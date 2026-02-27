@@ -958,7 +958,20 @@ _transformToLinkScale(baseline, treatmentEffect, outcomeType) {
         numSequences: design.numSequences,
         numPeriods: design.numPeriods,
         totalClusters: design.getTotalClusters(),
-        clustersPerSequence: [...design._clustersPerSequence]
+        clustersPerSequence: [...design._clustersPerSequence],
+        target_icc: raw.target_icc,
+        target_iac: raw.target_iac,
+        target_baseline: raw.target_baseline,
+        target_baseline_trt: raw.target_baseline_trt,
+        achieved_icc: raw.achieved_icc,
+        achieved_iac: raw.achieved_iac,
+        achieved_baseline: raw.achieved_baseline,
+        achieved_baseline_trt: raw.achieved_baseline_trt,
+        raw_sigma_c: raw.raw_sigma_c,
+        raw_sigma_p: raw.raw_sigma_p,
+        solver_iterations: raw.solver_iterations,
+        solver_converged: raw.solver_converged,
+        correlation_warning: raw.correlation_warning,
     };
     
     // Clean up — don't leave verification wrapper in cache

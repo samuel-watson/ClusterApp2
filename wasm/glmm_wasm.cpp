@@ -1197,6 +1197,19 @@ struct VerificationBundle {
     std::string sampling_structure;
     bool valid;
     std::string error;
+    double target_icc = 0.0;
+double target_iac = 0.0;
+double target_baseline = 0.0;   // p0 or mu0
+double target_baseline_trt = 0.0; // p1 or mu1
+double achieved_icc = 0.0;
+double achieved_iac = 0.0;
+double achieved_baseline = 0.0;
+double achieved_baseline_trt = 0.0;
+double raw_sigma_c = 0.0;      // before any decomposition
+double raw_sigma_p = 0.0;      // before scaling by 1/m
+int solver_iterations = 0;
+bool solver_converged = false;
+int correlation_warning = 0;
 };
 
 // Estimator types matching JavaScript
@@ -1259,6 +1272,11 @@ private:
     double stored_mu1_ = 0.0;
     double stored_mean_n_ = 1.0;
     int stored_num_periods_ = 1;
+    // Raw solver outputs (before theta scaling)
+    double solved_sigma_c_ = 0.0;
+    double solved_sigma_p_ = 0.0;
+    int solver_iterations_ = 0;
+    bool solver_converged_ = false;
 
     MatrixExport eigenToExport(const Eigen::MatrixXd& mat, const std::string& label) {
     MatrixExport exp;
@@ -1456,6 +1474,10 @@ bool updateParameters(double icc, double iac, double cac_or_lengthscale,
                 stored_num_periods_ = num_periods;
                 auto result = solveGLMMParameters(p0, p1, icc, iac, cac_or_lengthscale, sampling_structure, family);
                 correlation_warning_ = result.warning_code;
+                solved_sigma_c_ = result.sigma_c;      // add
+                solved_sigma_p_ = result.sigma_p;      // add
+                solver_iterations_ = result.iterations; // add
+                solver_converged_ = result.converged;   // add
                 EM_ASM({
                     console.log("=== GLMM Solver Debug ===");
                     console.log("Inputs: p0=", $0, "p1=", $1, "icc=", $2, "iac=", $3);
@@ -1501,6 +1523,10 @@ bool updateParameters(double icc, double iac, double cac_or_lengthscale,
                 stored_mean_n_ = mean_n;
                 stored_num_periods_ = num_periods;
                 correlation_warning_ = result.warning_code;
+                solved_sigma_c_ = result.sigma_c;      // add
+                solved_sigma_p_ = result.sigma_p;      // add
+                solver_iterations_ = result.iterations; // add
+                solver_converged_ = result.converged;   // add
                 EM_ASM({
                     console.log("=== GLMM Solver Debug ===");
                     console.log("Inputs: mu0=", $0, "mu1=", $1, "icc=", $2, "iac=", $3);
@@ -2213,6 +2239,38 @@ VerificationBundle getVerificationBundle(int estimator_type, double cv = 0.0) {
     vb.alpha = alpha;
     vb.target_power = target_power;
     vb.idx = include_intercept ? 1 : 0;
+    // Solver diagnostics for non-Gaussian models
+    if (family != "gaussian") {
+        vb.target_icc = stored_icc_;
+        vb.target_iac = stored_iac_;
+        vb.target_baseline = stored_mu0_;
+        vb.target_baseline_trt = stored_mu1_;
+        vb.raw_sigma_c = solved_sigma_c_;
+        vb.raw_sigma_p = solved_sigma_p_;
+        vb.solver_iterations = solver_iterations_;
+        vb.solver_converged = solver_converged_;
+        
+        // Forward check: recompute moments from solved parameters
+        if (family == "binomial") {
+            auto m0 = computeMoments(vb.beta[0], solved_sigma_c_, solved_sigma_p_);
+            auto m1 = computeMoments(vb.beta[0] + vb.beta[1], solved_sigma_c_, solved_sigma_p_);
+            vb.achieved_baseline = m0.mean;
+            vb.achieved_baseline_trt = m1.mean;
+            vb.achieved_icc = computeCorr(m0.EYY_diff_v, m0.mean);
+            double within = computeCorr(m0.EYY_same_v, m0.mean);
+            vb.achieved_iac = (vb.achieved_icc < 1.0 - 1e-10)
+                ? (within - vb.achieved_icc) / (1.0 - vb.achieved_icc) : 0.0;
+        } else if (family == "poisson") {
+            auto m0 = computeMomentsPoisson(vb.beta[0], solved_sigma_c_, solved_sigma_p_);
+            auto m1 = computeMomentsPoisson(vb.beta[0] + vb.beta[1], solved_sigma_c_, solved_sigma_p_);
+            vb.achieved_baseline = m0.mean;
+            vb.achieved_baseline_trt = m1.mean;
+            vb.achieved_icc = computeCorrPoisson(m0.EYY_diff_v, m0.mean, m0.EYY_same_v);
+            double within = computeCorrPoisson(m0.EYY_same_v, m0.mean, m0.EYY_same_v);
+            vb.achieved_iac = (vb.achieved_icc < 1.0 - 1e-10)
+                ? (within - vb.achieved_icc) / (1.0 - vb.achieved_icc) : 0.0;
+        }
+    }
     
     if (!model || !model_valid) {
         vb.error = "Model not initialized";
@@ -2759,7 +2817,20 @@ EMSCRIPTEN_BINDINGS(glmm_module) {
         .field("correlation_structure", &VerificationBundle::correlation_structure)
         .field("sampling_structure", &VerificationBundle::sampling_structure)
         .field("valid", &VerificationBundle::valid)
-        .field("error", &VerificationBundle::error);
+        .field("error", &VerificationBundle::error)
+        .field("target_icc", &VerificationBundle::target_icc)
+        .field("target_iac", &VerificationBundle::target_iac)
+        .field("target_baseline", &VerificationBundle::target_baseline)
+        .field("target_baseline_trt", &VerificationBundle::target_baseline_trt)
+        .field("achieved_icc", &VerificationBundle::achieved_icc)
+        .field("achieved_iac", &VerificationBundle::achieved_iac)
+        .field("achieved_baseline", &VerificationBundle::achieved_baseline)
+        .field("achieved_baseline_trt", &VerificationBundle::achieved_baseline_trt)
+        .field("raw_sigma_c", &VerificationBundle::raw_sigma_c)
+        .field("raw_sigma_p", &VerificationBundle::raw_sigma_p)
+        .field("solver_iterations", &VerificationBundle::solver_iterations)
+        .field("solver_converged", &VerificationBundle::solver_converged)
+        .field("correlation_warning", &VerificationBundle::correlation_warning);
     
     // Bind vector<double> for passing arrays
     register_vector<double>("VectorDouble");
