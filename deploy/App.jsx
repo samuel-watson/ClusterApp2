@@ -1469,6 +1469,40 @@ const designColors = [
   },
 ];
 
+const NumericInput = ({ value, onChange, min, max, step, className }) => {
+  const [raw, setRaw] = useState(String(value));
+  const [focused, setFocused] = useState(false);
+
+  useEffect(() => {
+    if (!focused) setRaw(String(value));
+  }, [value, focused]);
+
+  return (
+    <input
+      type="number"
+      step={step}
+      min={min}
+      max={max}
+      value={focused ? raw : value}
+      onChange={(e) => setRaw(e.target.value)}
+      onFocus={() => setFocused(true)}
+      onBlur={() => {
+        setFocused(false);
+        const parsed = parseFloat(raw);
+        if (isNaN(parsed)) {
+          onChange(min ?? 0);
+        } else {
+          let clamped = parsed;
+          if (min != null) clamped = Math.max(min, clamped);
+          if (max != null) clamped = Math.min(max, clamped);
+          onChange(clamped);
+        }
+      }}
+      className={className}
+    />
+  );
+};
+
 const ContextMenu = ({ x, y, items, onClose }) => {
   const menuRef = useRef(null);
 
@@ -2383,7 +2417,7 @@ const [rowWeights, setRowWeights] = useState(null);
   const [resultsStale, setResultsStale] = useState(false);
   const [isCalculating, setIsCalculating] = useState(false);
   const [cachedResults, setCachedResults] = useState(() =>
-    designs.map((d) => MathsInterface.calculateResults(d.design, d.options))
+    designs.map((d, i) => MathsInterface.calculateResults(d.design, d.options, `design-${i}`))
   );
   const [cacheVersion, setCacheVersion] = useState(0);
   const [cachedWeights, setCachedWeights] = useState(() =>
@@ -2527,13 +2561,13 @@ const correlationWarning = useMemo(() => {
   setIsCalculating(true);
   await new Promise((resolve) => setTimeout(resolve, 50));
 
-  const newResults = designs.map((d) =>
-    MathsInterface.calculateResults(d.design, d.options)
+  const newResults = designs.map((d,i) =>
+    MathsInterface.calculateResults(d.design, d.options, `design-${i}`)
   );
 
-  const newWeights = designs.map((d) => {
-  const cellWeights = MathsInterface.calculateOptimalWeights(d.design, d.options);
-  const seqWeights = MathsInterface.calculateOptimalSequenceWeights(d.design, d.options);
+  const newWeights = designs.map((d, i) => {
+  const cellWeights = MathsInterface.calculateOptimalWeights(d.design, d.options, `design-${i}`);
+  const seqWeights = MathsInterface.calculateOptimalSequenceWeights(d.design, d.options, `design-${i}`);
   console.log('Raw sequence weights:', seqWeights);
   const maxW = Math.max(...seqWeights);
   const normalizedRow = maxW > 0 ? seqWeights.map(w => w / maxW) : seqWeights;
@@ -2586,12 +2620,40 @@ const correlationWarning = useMemo(() => {
     [activeIndex]
   );
 
-  const addDesign = useCallback(() => {
-    if (designs.length >= 3) return;
-    const newDesign = createDesignEntry(`Design ${designs.length + 1}`);
-    setDesigns((prev) => [...prev, newDesign]);
-    setActiveIndex(designs.length);
-  }, [designs.length]);
+const [addMenuOpen, setAddMenuOpen] = useState(false);
+const addMenuRef = useRef(null);
+
+const addNewDesign = useCallback(() => {
+  if (designs.length >= 3) return;
+  const newDesign = createDesignEntry(`Design ${designs.length + 1}`);
+  setDesigns((prev) => [...prev, newDesign]);
+  setActiveIndex(designs.length);
+  setAddMenuOpen(false);
+}, [designs.length]);
+
+const duplicateDesign = useCallback((sourceIndex) => {
+  if (designs.length >= 3) return;
+  const source = designs[sourceIndex];
+  const newEntry = {
+    name: `Design ${designs.length + 1}`,
+    design: source.design.clone(),
+    options: { ...source.options },
+  };
+  setDesigns((prev) => [...prev, newEntry]);
+  setActiveIndex(designs.length);
+  setAddMenuOpen(false);
+}, [designs]);
+
+useEffect(() => {
+  if (!addMenuOpen) return;
+  const handleClickOutside = (e) => {
+    if (addMenuRef.current && !addMenuRef.current.contains(e.target)) {
+      setAddMenuOpen(false);
+    }
+  };
+  document.addEventListener("mousedown", handleClickOutside);
+  return () => document.removeEventListener("mousedown", handleClickOutside);
+}, [addMenuOpen]);
 
   const removeDesign = useCallback(
     (index) => {
@@ -2843,6 +2905,7 @@ const correlationWarning = useMemo(() => {
   const numSequences = design.numSequences;
   const numPeriods = design.numPeriods;
 const [showTooltip, setShowTooltip] = useState(false);
+const [showCorrTooltip, setShowCorrTooltip] = useState(false);
 const teInfo = getTreatmentEffectInfo(options.outcomeType);
 
   return (
@@ -2905,14 +2968,36 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
                 </div>
               ))}
               {designs.length < 3 && (
-                <button
-                  onClick={addDesign}
-                  className="px-3 py-1.5 bg-white border border-dashed border-slate-300 rounded-lg
-                           text-sm text-slate-500 hover:bg-slate-50 hover:border-slate-400 transition-colors"
-                >
-                  + Add Design
-                </button>
-              )}
+  <div className="relative" ref={addMenuRef}>
+    <button
+      onClick={() => setAddMenuOpen((prev) => !prev)}
+      className="px-3 py-1.5 bg-white border border-dashed border-slate-300 rounded-lg
+                 text-sm text-slate-500 hover:bg-slate-50 hover:border-slate-400 transition-colors"
+    >
+      + Add Design
+    </button>
+    {addMenuOpen && (
+      <div className="absolute top-full left-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-50 py-1 min-w-[160px]">
+        <button
+          onClick={addNewDesign}
+          className="w-full text-left px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+        >
+          New blank design
+        </button>
+        <div className="border-t border-slate-100 my-0.5" />
+        {designs.map((d, i) => (
+          <button
+            key={i}
+            onClick={() => duplicateDesign(i)}
+            className="w-full text-left px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 transition-colors"
+          >
+            Duplicate "{d.name}"
+          </button>
+        ))}
+      </div>
+    )}
+  </div>
+)}
             </div>
 
             {/* Presets */}
@@ -3147,20 +3232,14 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
                     options.outcomeType === "count") && (
                     <div className="flex flex-col gap-1">
                       <label className="text-xs text-slate-500">Baseline</label>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0.001"
-                        value={options.baseline}
-                        onChange={(e) =>
-                          updateOptions(
-                            "baseline",
-                            Math.max(0.001, parseFloat(e.target.value) || 0.001)
-                          )
-                        }
-                        className="px-2 py-1 text-sm border border-slate-300 rounded
-                                   focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
+                      <NumericInput
+  step="0.01"
+  min={0.001}
+  value={options.baseline}
+  onChange={(v) => updateOptions("baseline", v)}
+  className="px-2 py-1 text-sm border border-slate-300 rounded
+             focus:outline-none focus:ring-1 focus:ring-blue-500"
+/>
                     </div>
                   )}
 
@@ -3337,8 +3416,39 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
 )}
 
                       <div className="flex flex-col gap-1">
-                        <label className="text-xs text-slate-500">
+                        <label className="text-xs text-slate-500 flex items-center gap-1">
                           Correlation
+                          <div className="relative inline-block">
+                            <svg
+                              className="w-3.5 h-3.5 text-slate-400 cursor-help"
+                              onMouseEnter={() => setShowCorrTooltip(true)}
+                              onMouseLeave={() => setShowCorrTooltip(false)}
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2}
+                                d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                              />
+                            </svg>
+                            {showCorrTooltip && (
+                              <div className="absolute z-50 bottom-full left-1/2 -translate-x-1/2 mb-2 
+                                              px-3 py-2 text-xs text-white bg-slate-800 rounded shadow-lg
+                                              w-64 whitespace-normal">
+                                {{
+                                  exchangeable: "Constant correlation between all periods within a cluster: Cor(t, t') = τ².",
+                                  nested_exchangeable: "Exchangeable with a cluster autocorrelation (CAC) parameter: within-period correlation is τ² and between-period is τ² × CAC.",
+                                  exponential_decay: "Correlation decays as a power of the time lag: τ²λ^|t−t'|, where λ ∈ (0,1) controls the rate of decay.",
+                                  exponential_function: "Correlation decays via an exponential function: τ² exp(−|t−t'| / λ), where λ is the lengthscale.",
+                                }[options.correlationStructure]}
+                                <div className="absolute top-full left-1/2 -translate-x-1/2 
+                                                border-4 border-transparent border-t-slate-800" />
+                              </div>
+                            )}
+                          </div>
                         </label>
                         <select
                           value={options.correlationStructure}
@@ -3370,23 +3480,14 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
                               ? "CAC"
                               : "Lengthscale"}
                           </label>
-                          <input
-                            type="number"
-                            step="0.1"
-                            min="0.001"
-                            value={options.temporalCorrelation}
-                            onChange={(e) =>
-                              updateOptions(
-                                "temporalCorrelation",
-                                Math.max(
-                                  0.001,
-                                  parseFloat(e.target.value) || 0.001
-                                )
-                              )
-                            }
-                            className="px-2 py-1 text-sm border border-slate-300 rounded
-                                       focus:outline-none focus:ring-1 focus:ring-blue-500"
-                          />
+                          <NumericInput
+  step="0.1"
+  min={0.001}
+  value={options.temporalCorrelation}
+  onChange={(v) => updateOptions("temporalCorrelation", v)}
+  className="px-2 py-1 text-sm border border-slate-300 rounded
+             focus:outline-none focus:ring-1 focus:ring-blue-500"
+/>
                         </div>
                       )}
                     </>
@@ -3417,20 +3518,14 @@ const teInfo = getTreatmentEffectInfo(options.outcomeType);
 
                   <div className="flex flex-col gap-1">
                     <label className="text-xs text-slate-500">Mean Size</label>
-                    <input
-                      type="number"
-                      step="1"
-                      min="1"
-                      value={options.meanClusterSize}
-                      onChange={(e) =>
-                        updateOptions(
-                          "meanClusterSize",
-                          Math.max(1, parseInt(e.target.value) || 1)
-                        )
-                      }
-                      className="px-2 py-1 text-sm border border-slate-300 rounded
-                                 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    />
+                    <NumericInput
+  step="1"
+  min={1}
+  value={options.meanClusterSize}
+  onChange={(v) => updateOptions("meanClusterSize", Math.floor(v))}
+  className="px-2 py-1 text-sm border border-slate-300 rounded
+             focus:outline-none focus:ring-1 focus:ring-blue-500"
+/>
                   </div>
 
                   {options.sampleSizeMode !== "exact" && (
