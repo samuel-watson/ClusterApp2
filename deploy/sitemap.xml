@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+<url><loc>https://clustertrial.app/</loc><priority>1.0</priority></url>
+<url><loc>https://clustertrial.app/features.html</loc><priority>0.8</priority></url>
+<url><loc>https://clustertrial.app/guide.html</loc><priority>0.8</priority></url>
+<url><loc>https://clustertrial.app/designs/stepped-wedge.html</loc><priority>0.8</priority></url>
+<url><loc>https://clustertrial.app/methods/estimators.html</loc><priority>0.8</priority></url>
+<url><loc>https://clustertrial.app/methods/correlation.html</loc><priority>0.8</priority></url>
+<url><loc>https://clustertrial.app/methods/verification.html</loc><priority>0.8</priority></url>
+</urlset>

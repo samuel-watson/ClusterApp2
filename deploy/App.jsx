@@ -1846,7 +1846,7 @@ const CorrelationWarning = ({ warningCode }) => {
    console.log("CorrelationWarning rendered with:", warningCode);
   if (!warningCode || warningCode === 0) return null;
   
-  const isSevere = warningCode > 2;
+  const isSevere = warningCode > 1;
   
   return (
     <div className={`${isSevere ? 'bg-red-50 border-red-300' : 'bg-amber-50 border-amber-300'} border rounded-xl p-4 text-sm`}>
@@ -2521,13 +2521,14 @@ const correlationWarning = useMemo(() => {
   console.log("correlation iac: " , iac);
   console.log("correlation samp: ", samplingStructure);
   if (outcomeType === 'continuous') return 0;
-  if (samplingStructure === 'cross_section') return 0;
-  if (iac <= 0) return 0;
   console.log("correlation passed early exit");
   // Pass the design ID - check how other functions reference it
-  const warning = MathsInterface.getCorrelationWarning('default');
+  
+  const warning = MathsInterface.getCorrelationWarning(`design-${activeIndex}`);
   console.log("Got warning:", warning);
-  return warning;
+if (warning === 3) return 3;  // solver failure always surfaces
+if (samplingStructure === 'cross_section' || iac <= 0) return 0;
+return warning;
 }, [wasmLoaded, resultsStale, isCalculating, cachedResults, activeIndex, designs, options]);
 
   useEffect(() => {

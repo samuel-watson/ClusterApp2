@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The verification bundle: auditable cluster trial power calculations</title>
+<meta name="description" content="Export every matrix in a cluster trial power calculation plus an R script that independently reproduces the standard error, for protocol appendices and CTU review.">
+<link rel="canonical" href="https://clustertrial.app/methods/verification.html">
+<meta property="og:title" content="The verification bundle: auditable cluster trial power calculations">
+<meta property="og:description" content="Export every matrix in a cluster trial power calculation plus an R script that independently reproduces the standard error, for protocol appendices and CTU review.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://clustertrial.app/methods/verification.html">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}]});"></script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle","headline":"The verification bundle: auditable cluster trial power calculations",
+"description":"Export every matrix in a cluster trial power calculation plus an R script that independently reproduces the standard error, for protocol appendices and CTU review.","url":"https://clustertrial.app/methods/verification.html",
+"isPartOf":{"@type":"WebSite","name":"clustertrial.app","url":"https://clustertrial.app"},
+"about":{"@type":"Thing","name":"Cluster randomised trial sample size calculation"}}
+</script>
+</head>
+<body>
+<nav class="nav"><a class="nav__mark" href="/">clustertrial.app</a><div class="nav__links"><a href="/features.html">Features</a><a href="/guide.html">Getting started</a><a href="/designs/stepped-wedge.html">Designs</a><a href="/methods/estimators.html">Methods</a></div><a class="nav__cta" href="/">Open the calculator</a></nav>
+<div class="wrap">
+<div class="page page--railed"><aside class="rail"><p class="rail__title">On this page</p><ol><li><a href="#why">Why it exists</a></li><li><a href="#contents">Contents</a></li><li><a href="#solver">Solver diagnostics</a></li><li><a href="#using">In a submission</a></li></ol></aside><main class="prose">
+<p class="eyebrow">Methods</p>
+<h1>The verification bundle</h1>
+<p class="lede">Every power calculation the tool produces can be exported as a complete
+computational audit: every matrix in the derivation, plus an R script that reproduces the
+standard error independently. Nobody has to trust the software.</p>
+
+<h2 id="why">Why this exists</h2>
+<p>Sample size calculations are among the least reproducible parts of a trial protocol.
+A protocol typically states a number, an assumed effect size, an ICC, and a software name.
+A reviewer cannot check the arithmetic, cannot see the assumed covariance structure, and
+cannot tell whether the reported figure came from the design as finally specified or an
+earlier draft.</p>
+<p>Trials units are right to be cautious about a browser-based calculator for exactly this
+reason. The verification bundle is the answer: it makes the computation fully inspectable,
+so the tool&rsquo;s trustworthiness stops being something you have to take on faith.</p>
+
+<h2 id="contents">What the bundle contains</h2>
+<div class="tbl-scroll"><table>
+<thead><tr><th>Object</th><th>Description</th></tr></thead>
+<tbody>
+<tr><td><code>X</code></td><td>Design matrix, one row per cluster-period, columns for intercept, treatment, and period effects</td></tr>
+<tr><td><code>Sigma</code></td><td>Model-implied covariance matrix under the specified correlation and sampling structure</td></tr>
+<tr><td><code>M</code></td><td>Information matrix \(X^{\top}\Sigma^{-1}X\)</td></tr>
+<tr><td><code>Minv</code></td><td>Its inverse, whose treatment diagonal element is the model-based variance</td></tr>
+<tr><td><code>bread</code>, <code>meat</code></td><td>Components of the sandwich variance, when a robust estimator is selected</td></tr>
+<tr><td><code>V_working</code></td><td>Working covariance used for estimation, where it differs from the truth</td></tr>
+<tr><td><code>Sigma_true</code></td><td>Assumed true covariance, used in the meat of the sandwich</td></tr>
+<tr><td><code>beta</code>, <code>theta</code></td><td>Fixed effect and covariance parameter vectors</td></tr>
+<tr><td><code>se</code>, <code>dof</code>, <code>power</code></td><td>Resulting standard error, degrees of freedom, and power</td></tr>
+<tr><td>Solver diagnostics</td><td>Target versus achieved ICC, IAC and baseline; raw variance components; iteration count and convergence status</td></tr>
+<tr><td>Data matrix</td><td>The cluster-period level dataset the model was built from</td></tr>
+<tr><td>R script</td><td>Reads the exported matrices, recomputes the standard error, and compares it against the reported value</td></tr>
+</tbody></table></div>
+
+<h2 id="solver">The solver diagnostics</h2>
+<p>For binary and count outcomes, the reported ICC and IAC are targets on the observed scale
+that must be translated into random effect variances on the link scale. The bundle reports
+both the targets and what was actually achieved, along with the raw variance components and
+whether the solver converged.</p>
+<p>This matters because a small discrepancy between target and achieved correlation is
+normal and acceptable, while a large one means the requested combination was near the edge
+of what the model can represent. Exposing both lets a reviewer judge for themselves rather
+than relying on a warning threshold chosen by the software.
+<a href="/methods/correlation.html#binary">Background on why this arises &rarr;</a></p>
+
+<h2 id="using">Using it in a submission</h2>
+<ul>
+<li><strong>In a protocol appendix.</strong> Include the R script and the reported standard
+error. A statistical reviewer can rerun it in under a minute.</li>
+<li><strong>In a CTU quality process.</strong> The bundle documents every assumption
+explicitly, including ones a protocol paragraph would omit &mdash; the exact covariance
+structure, the estimator, the degrees of freedom method.</li>
+<li><strong>For your own records.</strong> When someone asks in eighteen months why the
+sample size is what it is, the bundle answers the question precisely, including which
+version of the design it referred to.</li>
+</ul>
+
+<div class="note">
+<strong>Recalculate before exporting</strong>
+<p>The export button is disabled while results are marked stale, so a bundle always
+corresponds to the design and parameters currently on screen rather than to an earlier
+state. If the button is greyed out, press Recalculate first.</p>
+</div>
+</main></div></div><footer class="footer"><div class="wrap"><div class="footer__cols">
+<div><h4>Designs</h4><ul>
+<li><a href="/designs/stepped-wedge.html">Stepped wedge</a></li>
+</ul></div>
+<div><h4>Methods</h4><ul>
+<li><a href="/methods/estimators.html">Estimators and inference</a></li>
+<li><a href="/methods/correlation.html">Correlation structures</a></li>
+<li><a href="/methods/verification.html">Verification bundle</a></li>
+</ul></div>
+<div><h4>Using the tool</h4><ul>
+<li><a href="/features.html">Features</a></li>
+<li><a href="/guide.html">Getting started</a></li>
+</ul></div>
+<div><h4>Project</h4><ul>
+<li><a href="https://github.com/samuel-watson/ClusterApp2">Source code</a></li>
+</ul></div>
+</div>
+<div class="footer__base">
+A free power and sample size calculator for cluster randomised trials. Runs entirely in your
+browser &mdash; no data leaves your machine. Built at the University of Birmingham.
+</div></div></footer></body></html>

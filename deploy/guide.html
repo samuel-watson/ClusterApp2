@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Getting started: your first cluster trial sample size calculation</title>
+<meta name="description" content="A step-by-step walkthrough from an empty allocation grid to an exported verification bundle, for parallel and stepped wedge cluster randomised trials.">
+<link rel="canonical" href="https://clustertrial.app/guide.html">
+<meta property="og:title" content="Getting started: your first cluster trial sample size calculation">
+<meta property="og:description" content="A step-by-step walkthrough from an empty allocation grid to an exported verification bundle, for parallel and stepped wedge cluster randomised trials.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://clustertrial.app/guide.html">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}]});"></script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle","headline":"Getting started: your first cluster trial sample size calculation",
+"description":"A step-by-step walkthrough from an empty allocation grid to an exported verification bundle, for parallel and stepped wedge cluster randomised trials.","url":"https://clustertrial.app/guide.html",
+"isPartOf":{"@type":"WebSite","name":"clustertrial.app","url":"https://clustertrial.app"},
+"about":{"@type":"Thing","name":"Cluster randomised trial sample size calculation"}}
+</script>
+</head>
+<body>
+<nav class="nav"><a class="nav__mark" href="/">clustertrial.app</a><div class="nav__links"><a href="/features.html">Features</a><a href="/guide.html" aria-current='page'>Getting started</a><a href="/designs/stepped-wedge.html">Designs</a><a href="/methods/estimators.html">Methods</a></div><a class="nav__cta" href="/">Open the calculator</a></nav>
+<div class="wrap">
+<div class="page page--railed"><aside class="rail"><p class="rail__title">On this page</p><ol><li><a href="#preset">Choose a shape</a></li><li><a href="#model">Draw the schedule</a></li><li><a href="#effect">Effect size</a></li><li><a href="#correlation">Correlation</a></li><li><a href="#sizes">Cluster sizes</a></li><li><a href="#estimator">Estimator</a></li><li><a href="#results">Results</a></li><li><a href="#explore">Explore</a></li><li><a href="#compare">Compare</a></li><li><a href="#export">Export</a></li></ol></aside><main class="prose">
+<p class="eyebrow">Getting started</p>
+<h1>Your first sample size calculation</h1>
+<p class="lede">A walkthrough for a parallel cluster randomised trial with a continuous
+outcome, then the same design extended to a stepped wedge. Ten minutes, no installation.</p>
+
+<ol class="steps">
+<li>
+<h3 id="preset">Choose a starting shape</h3>
+<p>The calculator opens on a two-arm parallel design with ten clusters per arm. Presets
+across the top load the other standard schedules. Pick the one closest to your trial
+&mdash; you will edit it next.</p>
+</li>
+<li>
+<h3 id="model">Draw the schedule</h3>
+<p>Click any cell to cycle it through control, intervention, and not enrolled. Right-click
+a row or column header to insert or delete sequences and periods, or to set an entire
+sequence or period in one action. The number beside each row label is the number of
+clusters randomised to that sequence; edit it directly.</p>
+<p>For a parallel trial you need one period and two sequences. For a stepped wedge with
+four sequences you need five periods, with each sequence crossing over one period later
+than the last.</p>
+</li>
+<li>
+<h3 id="effect">Set the outcome and effect size</h3>
+<p>Under <span class="param">Analysis Options</span>, choose continuous, binary, or count.
+The treatment effect field relabels itself accordingly: a mean difference for continuous
+outcomes, an absolute risk difference for binary, a rate ratio for counts. Binary and count
+outcomes also need a baseline &mdash; the control-arm probability or rate.</p>
+<p>A common error is entering a standardised effect size while thinking in raw units. For
+continuous outcomes the calculator works on the outcome&rsquo;s own scale, with the
+residual variance implied by the ICC.</p>
+</li>
+<li>
+<h3 id="correlation">Set the correlation</h3>
+<p>The intracluster correlation is the one parameter people most often guess at. Values
+between 0.01 and 0.05 are typical for health service outcomes measured on patients within
+practices or wards; higher values are common for outcomes measured on staff, or for
+process measures under strong local control.</p>
+<p>With more than one period you also choose a correlation structure. Exchangeable assumes
+correlation between two observations in the same cluster does not depend on how far apart
+in time they are &mdash; usually optimistic for a trial running over years.
+<a href="/methods/correlation.html">The alternatives are explained here.</a></p>
+</li>
+<li>
+<h3 id="sizes">Set cluster sizes</h3>
+<p>Under <span class="param">Sample Size Options</span>, enter the mean number of
+individuals per cluster-period. If cluster sizes vary substantially, enter a coefficient
+of variation; the calculator inflates the variance accordingly. If you know the exact size
+of each cell &mdash; which happens when clusters are known in advance &mdash; switch to
+exact mode and right-click cells to set them individually.</p>
+</li>
+<li>
+<h3 id="estimator">Choose how you will analyse the trial</h3>
+<p>Set the estimator to match your analysis plan, not to maximise power. If your
+statistical analysis plan says a linear mixed model with Kenward&ndash;Roger degrees of
+freedom, choose that. Then change it a few times and watch what happens to power. A design
+whose power is stable across estimators is robust; one that is only adequately powered
+under the most optimistic method is not.</p>
+</li>
+<li>
+<h3 id="results">Read the results, and the warnings</h3>
+<p>Power, degrees of freedom, standard error, and minimum detectable effect appear in the
+results table. If a warning panel appears above it, read it before anything else &mdash;
+it means either that your estimator choice is flattering the design, or that the
+correlation parameters you have specified are hard to realise in the model being fitted.</p>
+</li>
+<li>
+<h3 id="explore">Explore rather than solve</h3>
+<p>The plot below the results is the most useful part of the tool. Set the x-axis to total
+clusters and you can read off the number needed for 80% power directly. Set it to ICC and
+you can see how sensitive that answer is to a parameter you are guessing. Switch to the
+contour view to see power across cluster count and cluster size at once &mdash; which is
+the real trade-off when recruitment is the binding constraint.</p>
+</li>
+<li>
+<h3 id="compare">Add a comparison</h3>
+<p>Use <span class="param">Add Design</span> to duplicate what you have, then change one
+thing: add a baseline period, drop a sequence, halve the cluster size. Both designs appear
+side by side in the results table and overlaid on the plot. This is usually more
+informative than any single number.</p>
+</li>
+<li>
+<h3 id="export">Export</h3>
+<p>Save the session as JSON so you can return to it. Export the grid as a PNG for the
+protocol. If the calculation is going into a grant application or a submission, export the
+verification bundle &mdash; it contains every matrix in the computation and an R script
+that reproduces the standard error independently.</p>
+</li>
+</ol>
+
+<div class="note">
+<strong>A note on what power calculations are for</strong>
+<p>A sample size calculation is a statement of what a trial can detect under assumptions
+you have chosen, not a prediction. The most valuable output of this tool is usually not the
+number in the power box but the shape of the curve around it &mdash; how quickly power
+falls away if the ICC is twice what you assumed, or if recruitment reaches 70% of target.
+Report that sensitivity, and reviewers will trust the headline number more, not less.</p>
+</div>
+</main></div></div><footer class="footer"><div class="wrap"><div class="footer__cols">
+<div><h4>Designs</h4><ul>
+<li><a href="/designs/stepped-wedge.html">Stepped wedge</a></li>
+</ul></div>
+<div><h4>Methods</h4><ul>
+<li><a href="/methods/estimators.html">Estimators and inference</a></li>
+<li><a href="/methods/correlation.html">Correlation structures</a></li>
+<li><a href="/methods/verification.html">Verification bundle</a></li>
+</ul></div>
+<div><h4>Using the tool</h4><ul>
+<li><a href="/features.html">Features</a></li>
+<li><a href="/guide.html">Getting started</a></li>
+</ul></div>
+<div><h4>Project</h4><ul>
+<li><a href="https://github.com/samuel-watson/ClusterApp2">Source code</a></li>
+</ul></div>
+</div>
+<div class="footer__base">
+A free power and sample size calculator for cluster randomised trials. Runs entirely in your
+browser &mdash; no data leaves your machine. Built at the University of Birmingham.
+</div></div></footer></body></html>

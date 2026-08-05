@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Estimators and inference for cluster randomised trials</title>
+<meta name="description" content="Model-based, Satterthwaite, Kenward-Roger, GEE with robust sandwich variance, and design effect calculations for cluster randomised trials, and when each one misleads.">
+<link rel="canonical" href="https://clustertrial.app/methods/estimators.html">
+<meta property="og:title" content="Estimators and inference for cluster randomised trials">
+<meta property="og:description" content="Model-based, Satterthwaite, Kenward-Roger, GEE with robust sandwich variance, and design effect calculations for cluster randomised trials, and when each one misleads.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://clustertrial.app/methods/estimators.html">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}]});"></script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle","headline":"Estimators and inference for cluster randomised trials",
+"description":"Model-based, Satterthwaite, Kenward-Roger, GEE with robust sandwich variance, and design effect calculations for cluster randomised trials, and when each one misleads.","url":"https://clustertrial.app/methods/estimators.html",
+"isPartOf":{"@type":"WebSite","name":"clustertrial.app","url":"https://clustertrial.app"},
+"about":{"@type":"Thing","name":"Cluster randomised trial sample size calculation"}}
+</script>
+</head>
+<body>
+<nav class="nav"><a class="nav__mark" href="/">clustertrial.app</a><div class="nav__links"><a href="/features.html">Features</a><a href="/guide.html">Getting started</a><a href="/designs/stepped-wedge.html">Designs</a><a href="/methods/estimators.html" aria-current='page'>Methods</a></div><a class="nav__cta" href="/">Open the calculator</a></nav>
+<div class="wrap">
+<div class="page page--railed"><aside class="rail"><p class="rail__title">On this page</p><ol><li><a href="#core">Common core</a></li><li><a href="#modelbased">Model-based</a></li><li><a href="#robust">Robust and GEE</a></li><li><a href="#conditional">Conditional vs marginal</a></li><li><a href="#designeffect">Design effect</a></li><li><a href="#choosing">Choosing</a></li></ol></aside><main class="prose">
+<p class="eyebrow">Methods</p>
+<h1>Estimators and inference</h1>
+<p class="lede">Power is not a property of a design alone. It is a property of a design
+together with an analysis method. This page sets out what each estimator in the calculator
+computes and when it will mislead you.</p>
+
+<h2 id="core">The common core</h2>
+<p>Every estimator starts from a design matrix \(X\) with one row per cluster-period and a
+model-implied covariance matrix \(\Sigma\). The generalised least squares information
+matrix is</p>
+<p>$$M = X^{\top}\Sigma^{-1}X$$</p>
+<p>and the model-based variance of the treatment effect estimate is the diagonal element of
+\(M^{-1}\) corresponding to the treatment column:</p>
+<p>$$\operatorname{Var}(\hat\theta) = \left[(X^{\top}\Sigma^{-1}X)^{-1}\right]_{kk}$$</p>
+<p>Everything else is a variation on how \(\Sigma\) is built, whether a different working
+covariance is used for estimation than for the true variance, and what reference
+distribution the test statistic is compared against.</p>
+
+<h2 id="modelbased">Model-based inference</h2>
+<h3>Normal approximation</h3>
+<p>The default. Treats \(\hat\theta / \operatorname{SE}(\hat\theta)\) as standard normal
+under the null, giving</p>
+<p>$$\text{power} = \Phi\!\left(\frac{|\theta|}{\operatorname{SE}} - z_{1-\alpha/2}\right)$$</p>
+<p>Accurate when the number of clusters is large. With few clusters it is optimistic,
+because it ignores the fact that the variance components are estimated rather than known.</p>
+
+<h3>t-test</h3>
+<p>Same standard error, but referred to a <em>t</em> distribution with degrees of freedom
+based on the number of clusters minus the number of estimated fixed effects. A minimal
+correction, but it removes the worst of the anti-conservatism at essentially no cost.</p>
+
+<h3>Satterthwaite</h3>
+<p>Approximates the degrees of freedom by matching the first two moments of the estimated
+variance to a scaled chi-squared distribution. Accounts for the fact that different
+contrasts in an unbalanced design carry different effective sample sizes, so the degrees of
+freedom need not be an integer and can be far below the cluster count.</p>
+
+<h3>Kenward&ndash;Roger</h3>
+<p>Inflates the variance estimate to account for the downward bias induced by estimating the
+variance components, <em>and</em> adjusts the degrees of freedom. The most conservative of
+the model-based options and generally the best behaved with small numbers of clusters. If
+your analysis plan is a linear mixed model and you have fewer than about 30 clusters, this
+is usually the honest choice.</p>
+
+<h2 id="robust">Robust and marginal methods</h2>
+<p>GEE estimators use a working covariance \(V\) that need not equal the truth. The variance
+is then estimated by a sandwich:</p>
+<p>$$\operatorname{Var}(\hat\theta) = \underbrace{(X^{\top}V^{-1}X)^{-1}}_{\text{bread}}\;
+\underbrace{X^{\top}V^{-1}\Sigma V^{-1}X}_{\text{meat}}\;
+\underbrace{(X^{\top}V^{-1}X)^{-1}}_{\text{bread}}$$</p>
+<p><strong>Independence working correlation</strong> takes \(V = I\): the point estimate
+ignores clustering entirely, but the sandwich variance restores valid inference. Simple and
+robust to covariance misspecification, at some cost in efficiency.</p>
+<p><strong>Exchangeable working correlation</strong> uses a correctly shaped working
+covariance, recovering most of the efficiency while keeping the robustness of the sandwich.</p>
+<p>The sandwich variance is consistent as the number of clusters grows, but it is
+<em>biased downward</em> when that number is small &mdash; the well known small-sample
+problem with GEE. A <em>t</em>-test variant is provided for this reason. Below roughly 30
+clusters, treat an uncorrected robust GEE result with the same suspicion as an uncorrected
+model-based one.</p>
+
+<h2 id="conditional">Conditional and marginal effects</h2>
+<p>For continuous outcomes with an identity link, a mixed model and a GEE estimate the same
+quantity. For binary and count outcomes they do not.</p>
+<p>A GLMM with a logit link estimates a <em>conditional</em>, cluster-specific log odds
+ratio: the effect of treatment for a given cluster. A GEE estimates a <em>marginal</em>,
+population-averaged log odds ratio: the effect averaged over the cluster distribution.
+Because the logit is non-linear, these differ, with the marginal effect attenuated toward
+the null relative to the conditional one. The gap widens as the between-cluster variance
+grows.</p>
+<div class="note">
+<strong>What to do about it</strong>
+<p>Decide which estimand your trial question is about, then match the estimator to it, then
+match the effect size you enter to the same scale. A conditional log odds ratio entered as
+if it were marginal will overstate power. The calculator labels the binary and count
+estimators explicitly as conditional or marginal for this reason.</p>
+</div>
+
+<h2 id="designeffect">Design effect</h2>
+<p>Included for comparison with textbook and older calculations. The individually randomised
+sample size is inflated by</p>
+<p>$$\text{DE} = 1 + (\bar{m} - 1)\rho$$</p>
+<p>for equal cluster sizes, or, allowing a coefficient of variation \(k\) in cluster size,</p>
+<p>$$\text{DE} = 1 + \left\{\bar{m}(1 + k^{2}) - 1\right\}\rho$$</p>
+<p>This is exact for a parallel design with a single period and no covariates. It is
+<em>not</em> correct for any longitudinal design, and applying it to a stepped wedge will
+overstate the required sample size substantially, because it ignores the within-cluster
+comparisons entirely. It is offered so you can see the size of that discrepancy rather than
+as a recommendation.</p>
+
+<h2 id="choosing">Choosing, in practice</h2>
+<div class="tbl-scroll"><table>
+<thead><tr><th>Situation</th><th>Reasonable choice</th></tr></thead>
+<tbody>
+<tr><td>Continuous outcome, &lt; 30 clusters</td><td>Kenward&ndash;Roger</td></tr>
+<tr><td>Continuous outcome, many clusters</td><td>Model-based, Satterthwaite for reassurance</td></tr>
+<tr><td>Binary outcome, conditional estimand</td><td>GLMM with Satterthwaite or Kenward&ndash;Roger</td></tr>
+<tr><td>Binary outcome, marginal estimand</td><td>GEE exchangeable robust, with <em>t</em>-test if few clusters</td></tr>
+<tr><td>Covariance structure genuinely uncertain</td><td>GEE robust, and compare against model-based</td></tr>
+</tbody></table></div>
+<p>Whichever you choose, look at the spread across the alternatives before you commit. If
+adequate power depends on which estimator you pick, the design is fragile, and that is worth
+knowing at the protocol stage rather than at the analysis.</p>
+</main></div></div><footer class="footer"><div class="wrap"><div class="footer__cols">
+<div><h4>Designs</h4><ul>
+<li><a href="/designs/stepped-wedge.html">Stepped wedge</a></li>
+</ul></div>
+<div><h4>Methods</h4><ul>
+<li><a href="/methods/estimators.html">Estimators and inference</a></li>
+<li><a href="/methods/correlation.html">Correlation structures</a></li>
+<li><a href="/methods/verification.html">Verification bundle</a></li>
+</ul></div>
+<div><h4>Using the tool</h4><ul>
+<li><a href="/features.html">Features</a></li>
+<li><a href="/guide.html">Getting started</a></li>
+</ul></div>
+<div><h4>Project</h4><ul>
+<li><a href="https://github.com/samuel-watson/ClusterApp2">Source code</a></li>
+</ul></div>
+</div>
+<div class="footer__base">
+A free power and sample size calculator for cluster randomised trials. Runs entirely in your
+browser &mdash; no data leaves your machine. Built at the University of Birmingham.
+</div></div></footer></body></html>

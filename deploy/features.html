@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Features — clustertrial.app cluster randomised trial calculator</title>
+<meta name="description" content="Graphical trial design, ten estimators, side-by-side design comparison, optimal allocation weights, exportable verification bundles and power plots for cluster randomised trials.">
+<link rel="canonical" href="https://clustertrial.app/features.html">
+<meta property="og:title" content="Features — clustertrial.app cluster randomised trial calculator">
+<meta property="og:description" content="Graphical trial design, ten estimators, side-by-side design comparison, optimal allocation weights, exportable verification bundles and power plots for cluster randomised trials.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://clustertrial.app/features.html">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}]});"></script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle","headline":"Features — clustertrial.app cluster randomised trial calculator",
+"description":"Graphical trial design, ten estimators, side-by-side design comparison, optimal allocation weights, exportable verification bundles and power plots for cluster randomised trials.","url":"https://clustertrial.app/features.html",
+"isPartOf":{"@type":"WebSite","name":"clustertrial.app","url":"https://clustertrial.app"},
+"about":{"@type":"Thing","name":"Cluster randomised trial sample size calculation"}}
+</script>
+</head>
+<body>
+<nav class="nav"><a class="nav__mark" href="/">clustertrial.app</a><div class="nav__links"><a href="/features.html" aria-current='page'>Features</a><a href="/guide.html">Getting started</a><a href="/designs/stepped-wedge.html">Designs</a><a href="/methods/estimators.html">Methods</a></div><a class="nav__cta" href="/">Open the calculator</a></nav>
+<div class="wrap">
+<div class="page"><main class="prose">
+<p class="eyebrow">Features</p>
+<h1>What this calculator does that others don&rsquo;t</h1>
+<p class="lede">Most cluster trial sample size tools implement one design and one variance
+formula. This one lets you draw an arbitrary allocation schedule, compare designs side by
+side, choose among ten inference methods, and export a full audit of the computation.</p>
+
+<figure class="grid-fig grid-fig--animate"><svg viewBox="0 0 272 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Trial allocation grid, 4 sequences by 5 periods"><text class="axis-label" x="71" y="14" text-anchor="middle">T1</text><text class="axis-label" x="115" y="14" text-anchor="middle">T2</text><text class="axis-label" x="159" y="14" text-anchor="middle">T3</text><text class="axis-label" x="203" y="14" text-anchor="middle">T4</text><text class="axis-label" x="247" y="14" text-anchor="middle">T5</text><text class="axis-label" x="40" y="47" text-anchor="end">S1</text><rect class="cell-c" x="52" y="24" width="38" height="38"/><rect class="cell-i" x="96" y="24" width="38" height="38"/><rect class="cell-i" x="140" y="24" width="38" height="38"/><rect class="cell-i" x="184" y="24" width="38" height="38"/><rect class="cell-i" x="228" y="24" width="38" height="38"/><text class="axis-label" x="40" y="91" text-anchor="end">S2</text><rect class="cell-c" x="52" y="68" width="38" height="38"/><rect class="cell-c" x="96" y="68" width="38" height="38"/><rect class="cell-i" x="140" y="68" width="38" height="38"/><rect class="cell-i" x="184" y="68" width="38" height="38"/><rect class="cell-i" x="228" y="68" width="38" height="38"/><text class="axis-label" x="40" y="135" text-anchor="end">S3</text><rect class="cell-c" x="52" y="112" width="38" height="38"/><rect class="cell-c" x="96" y="112" width="38" height="38"/><rect class="cell-c" x="140" y="112" width="38" height="38"/><rect class="cell-i" x="184" y="112" width="38" height="38"/><rect class="cell-i" x="228" y="112" width="38" height="38"/><text class="axis-label" x="40" y="179" text-anchor="end">S4</text><rect class="cell-c" x="52" y="156" width="38" height="38"/><rect class="cell-c" x="96" y="156" width="38" height="38"/><rect class="cell-c" x="140" y="156" width="38" height="38"/><rect class="cell-c" x="184" y="156" width="38" height="38"/><rect class="cell-i" x="228" y="156" width="38" height="38"/></svg><div class="legend"><span><i class="k-c"></i>Control</span><span><i class="k-i"></i>Intervention</span><span><i class="k-o"></i>Not enrolled</span></div><figcaption>The allocation grid is the primary interface. Rows are randomised sequences, columns are time periods, and each cell is control, intervention, or not enrolled. Any schedule you can draw, the calculator can evaluate.</figcaption></figure>
+
+<div class="feature">
+<p class="feature__tag">Design</p>
+<h2 id="grid">Draw the trial instead of picking from a menu</h2>
+<p>Click a cell to cycle it between control, intervention and not enrolled. Right-click a
+row or column header to insert, delete, or set a whole sequence or period at once. Presets
+give you the standard shapes &mdash; parallel, parallel with baseline, stepped wedge,
+stepped wedge with an implementation period, cross-over, cross-over with washout,
+staircase &mdash; but they are starting points, not constraints.</p>
+<p>This matters because real trials rarely match a textbook diagram. Sites join late, a
+period is lost to a service reorganisation, one arm has a transition phase where data
+aren&rsquo;t analysable. A tool that only knows &ldquo;stepped wedge&rdquo; cannot cost
+those designs. Here you draw the schedule that will actually happen, set the number of
+clusters per sequence independently, and, if cluster-period sizes differ, set each cell
+size individually.</p>
+</div>
+
+<div class="feature">
+<p class="feature__tag">Inference</p>
+<h2 id="estimators">Ten estimators, not one</h2>
+<p>Power depends on how you will analyse the trial, and the difference is not small. A
+mixed model with a normal approximation and a GEE with a robust sandwich variance can
+disagree by twenty percentage points of power on the same design with fifteen clusters.
+Reporting only the optimistic one is how underpowered trials get funded.</p>
+<p>The calculator offers model-based inference with a <em>z</em>- or <em>t</em>-test,
+Satterthwaite and Kenward&ndash;Roger small-sample corrections, GEE with independence or
+exchangeable working correlation and robust variance, and a classical design-effect
+calculation for comparison. Switching estimator recomputes immediately, so you can see
+the spread rather than guess at it.</p>
+<p><a href="/methods/estimators.html">How each estimator is computed &rarr;</a></p>
+</div>
+
+<div class="feature">
+<p class="feature__tag">Comparison</p>
+<h2 id="compare">Up to three designs open at once</h2>
+<p>Sample size decisions are comparative. Is it cheaper to add clusters or to recruit more
+people per cluster? Does a baseline period buy back enough precision to justify the extra
+year? Does the staircase design lose much against the full stepped wedge?</p>
+<p>You can hold three designs in the same session, each with its own allocation grid and
+its own parameters, and see power, degrees of freedom, standard error, and minimum
+detectable effect for all three in one table. Plots overlay the designs on the same axes.
+Duplicating a design and changing one thing is a two-click operation.</p>
+</div>
+
+<div class="feature">
+<p class="feature__tag">Optimal design</p>
+<h2 id="optimal">Optimal weights, shown on the grid</h2>
+<p>Given a design and a correlation structure, some cluster-periods carry far more
+information about the treatment effect than others. The calculator solves for the optimal
+allocation weights and renders them directly onto the grid: cells shrink in proportion to
+how little they contribute.</p>
+<p>Cell weights show where individual observations are most valuable. Row weights show how
+clusters should be distributed across sequences &mdash; often strikingly non-uniform in a
+stepped wedge, where the middle sequences are worth more than the first and last. You can
+use this to reallocate recruitment effort, or simply as a diagnostic for whether a design
+is wasting data.</p>
+</div>
+
+<div class="feature">
+<p class="feature__tag">Diagnostics</p>
+<h2 id="warnings">Warnings when the numbers should not be trusted</h2>
+<p>Two failure modes are common enough that the calculator watches for them.</p>
+<p><strong>Optimistic inference.</strong> If your selected estimator reports power more
+than ten percentage points above the most conservative alternative, you get a warning
+naming the gap and suggesting a small-sample correction or a robust variance. This is
+almost always a signal that the cluster count is too small for the asymptotics you have
+chosen.</p>
+<p><strong>Incompatible correlation parameters.</strong> For binary and count outcomes,
+an ICC and individual autocorrelation specified on the observed scale must be translated
+into random effect variances on the link scale, and not every combination is achievable.
+Some require a latent variance so extreme that individuals are effectively deterministic.
+The solver reports when this happens, distinguishing &ldquo;high but usable&rdquo; from
+&ldquo;implausible&rdquo; from &ldquo;no solution found&rdquo;, so you know whether the
+power figure means anything.</p>
+<p><a href="/methods/correlation.html">Why binary outcomes make this hard &rarr;</a></p>
+</div>
+
+<div class="feature">
+<p class="feature__tag">Export</p>
+<h2 id="verification">A verification bundle you can hand to a reviewer</h2>
+<p>This is the feature with no equivalent anywhere else. One click exports an archive
+containing the design matrix, the assumed covariance matrix, the information matrix and
+its inverse, the bread and meat of the sandwich estimator, the fitted parameter vectors,
+the resulting standard error and degrees of freedom &mdash; plus an R script that
+recomputes the standard error from those matrices and checks it against the reported
+value.</p>
+<p>The point is that nobody has to take the calculator&rsquo;s word for anything. A
+statistical reviewer, a CTU quality process, or a regulator can reproduce the number
+independently in a few minutes. If your trials unit will not accept a sample size from a
+web app, this is the answer to that objection.</p>
+<p><a href="/methods/verification.html">What&rsquo;s in the bundle &rarr;</a></p>
+</div>
+
+<div class="feature">
+<p class="feature__tag">Export</p>
+<h2 id="figures">Publication-ready diagrams and plots</h2>
+<p>Export the allocation grid as a PNG for your protocol or grant application. Export
+power curves and power surfaces as PNG or SVG at publication resolution. Plot power or
+minimum detectable effect against ICC, cluster-period size, treatment effect, baseline
+prevalence, or total clusters, over a range you set, with a target power reference line.
+Heatmap and contour views show power across cluster count and cluster size
+simultaneously.</p>
+</div>
+
+<div class="feature">
+<p class="feature__tag">Sessions</p>
+<h2 id="save">Save the session, come back to it</h2>
+<p>Export all open designs, with their parameters and results, to a JSON file, and import
+it later to resume exactly where you stopped. Sample size calculations get revisited
+&mdash; when a reviewer questions an assumption, when funding changes the number of sites,
+when the ICC estimate is updated from pilot data. Keeping the file alongside the protocol
+means the next revision takes minutes.</p>
+</div>
+
+<div class="feature">
+<p class="feature__tag">Privacy</p>
+<h2 id="local">Everything runs in your browser</h2>
+<p>The statistical engine is compiled to WebAssembly and executes locally. No design,
+parameter, or result is transmitted anywhere. There is no account, no login, and nothing
+to install.</p>
+</div>
+
+<hr>
+<h2 id="start">Start here</h2>
+<ul class="cards">
+<li class="card"><h3><a href="/guide.html">Your first calculation</a></h3>
+<p>A ten-minute walkthrough from empty grid to exported bundle.</p></li>
+<li class="card"><h3><a href="/designs/stepped-wedge.html">Stepped wedge sample size</a></h3>
+<p>The model, the parameters, and a worked example.</p></li>
+<li class="card"><h3><a href="/methods/estimators.html">Choosing an estimator</a></h3>
+<p>What each method assumes and when it misleads.</p></li>
+</ul>
+</main></div></div><footer class="footer"><div class="wrap"><div class="footer__cols">
+<div><h4>Designs</h4><ul>
+<li><a href="/designs/stepped-wedge.html">Stepped wedge</a></li>
+</ul></div>
+<div><h4>Methods</h4><ul>
+<li><a href="/methods/estimators.html">Estimators and inference</a></li>
+<li><a href="/methods/correlation.html">Correlation structures</a></li>
+<li><a href="/methods/verification.html">Verification bundle</a></li>
+</ul></div>
+<div><h4>Using the tool</h4><ul>
+<li><a href="/features.html">Features</a></li>
+<li><a href="/guide.html">Getting started</a></li>
+</ul></div>
+<div><h4>Project</h4><ul>
+<li><a href="https://github.com/samuel-watson/ClusterApp2">Source code</a></li>
+</ul></div>
+</div>
+<div class="footer__base">
+A free power and sample size calculator for cluster randomised trials. Runs entirely in your
+browser &mdash; no data leaves your machine. Built at the University of Birmingham.
+</div></div></footer></body></html>

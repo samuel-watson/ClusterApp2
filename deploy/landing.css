@@ -1,0 +1,134 @@
+/* Static chrome for the calculator page.
+   Everything is scoped under .ct-static so it cannot restyle the React app,
+   which is using Tailwind's own utility classes. */
+
+.ct-static {
+  --ink: #0f172a;
+  --muted: #64748b;
+  --faint: #94a3b8;
+  --rule: #e2e8f0;
+  --surface: #f8fafc;
+  --accent: #2563eb;
+  --arm: #d1fae5;
+  --arm-line: #34d399;
+  --display: "Source Serif 4", Georgia, serif;
+  --body: "Inter", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  font-family: var(--body);
+  color: #334155;
+}
+
+.ct-static a { color: var(--accent); }
+
+/* --- nav --- */
+.ct-static.ct-nav {
+  display: flex;
+  align-items: center;
+  gap: 1.4rem;
+  padding: 0.6rem 1.25rem;
+  border-bottom: 1px solid var(--rule);
+  background: #fff;
+  flex-wrap: wrap;
+  position: relative;
+  z-index: 40;
+}
+.ct-nav__mark {
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  color: var(--ink);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.ct-nav__mark::before {
+  content: "";
+  display: inline-block;
+  width: 9px; height: 9px;
+  margin-right: 0.5rem;
+  border-radius: 2px;
+  background: var(--arm);
+  border: 1.5px solid var(--arm-line);
+}
+.ct-nav__links { display: flex; gap: 1.15rem; flex-wrap: wrap; }
+.ct-nav__links a {
+  font-size: 0.84rem;
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 1.5px solid transparent;
+  padding-bottom: 1px;
+}
+.ct-nav__links a:hover { color: var(--ink); border-bottom-color: var(--arm-line); }
+
+/* --- content band below the calculator --- */
+.ct-static.ct-band {
+  border-top: 1px solid var(--rule);
+  background: var(--surface);
+  padding: 3.5rem 1.5rem 1rem;
+}
+.ct-band__inner { max-width: 1100px; margin: 0 auto; }
+.ct-band h2 {
+  font-family: var(--display);
+  font-weight: 600;
+  font-size: 1.6rem;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  margin: 0 0 0.9rem;
+  line-height: 1.2;
+}
+.ct-band h3 {
+  font-family: var(--body);
+  font-size: 0.97rem;
+  font-weight: 600;
+  color: var(--ink);
+  margin: 0 0 0.35rem;
+}
+.ct-band p { margin: 0 0 1rem; line-height: 1.65; max-width: 68ch; font-size: 16px; }
+.ct-band ul.ct-plain { list-style: none; padding: 0; margin: 0 0 1.4rem; max-width: 68ch; }
+.ct-band ul.ct-plain li {
+  padding-left: 1.1rem;
+  position: relative;
+  margin-bottom: 0.45rem;
+  font-size: 15.5px;
+  line-height: 1.6;
+}
+.ct-band ul.ct-plain li::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0.62em;
+  width: 7px; height: 7px;
+  border-radius: 2px;
+  background: var(--arm);
+  border: 1.5px solid var(--arm-line);
+}
+.ct-cards {
+  display: grid;
+  gap: 0.9rem;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  list-style: none;
+  padding: 0;
+  margin: 2rem 0 0;
+}
+.ct-cards li {
+  background: #fff;
+  border: 1px solid var(--rule);
+  border-radius: 11px;
+  padding: 1.05rem 1.15rem;
+}
+.ct-cards p { font-size: 0.87rem; color: var(--muted); margin: 0; }
+.ct-cards a { text-decoration: none; }
+.ct-cards a:hover { text-decoration: underline; }
+
+/* --- footer --- */
+.ct-static.ct-foot {
+  background: var(--surface);
+  padding: 0 1.5rem 2.5rem;
+  font-size: 0.82rem;
+  color: var(--faint);
+}
+.ct-foot__inner {
+  max-width: 1100px;
+  margin: 0 auto;
+  border-top: 1px solid var(--rule);
+  padding-top: 1.3rem;
+}
+.ct-foot a { color: var(--muted); text-decoration: none; }
+.ct-foot a:hover { color: var(--ink); text-decoration: underline; }

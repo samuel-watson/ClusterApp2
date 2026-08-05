@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stepped wedge sample size calculation — model, parameters and worked example</title>
+<meta name="description" content="How to calculate sample size and power for a stepped wedge cluster randomised trial: the Hussey and Hughes model, correlation assumptions, incomplete and staircase variants, and common pitfalls.">
+<link rel="canonical" href="https://clustertrial.app/designs/stepped-wedge.html">
+<meta property="og:title" content="Stepped wedge sample size calculation — model, parameters and worked example">
+<meta property="og:description" content="How to calculate sample size and power for a stepped wedge cluster randomised trial: the Hussey and Hughes model, correlation assumptions, incomplete and staircase variants, and common pitfalls.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://clustertrial.app/designs/stepped-wedge.html">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}]});"></script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle","headline":"Stepped wedge sample size calculation — model, parameters and worked example",
+"description":"How to calculate sample size and power for a stepped wedge cluster randomised trial: the Hussey and Hughes model, correlation assumptions, incomplete and staircase variants, and common pitfalls.","url":"https://clustertrial.app/designs/stepped-wedge.html",
+"isPartOf":{"@type":"WebSite","name":"clustertrial.app","url":"https://clustertrial.app"},
+"about":{"@type":"Thing","name":"Cluster randomised trial sample size calculation"}}
+</script>
+</head>
+<body>
+<nav class="nav"><a class="nav__mark" href="/">clustertrial.app</a><div class="nav__links"><a href="/features.html">Features</a><a href="/guide.html">Getting started</a><a href="/designs/stepped-wedge.html" aria-current='page'>Designs</a><a href="/methods/estimators.html">Methods</a></div><a class="nav__cta" href="/">Open the calculator</a></nav>
+<div class="wrap">
+<div class="page page--railed"><aside class="rail"><p class="rail__title">On this page</p><ol><li><a href="#model">The model</a></li><li><a href="#parameters">Parameters</a></li><li><a href="#intuition">Why it works</a></li><li><a href="#variants">Variants</a></li><li><a href="#pitfalls">Pitfalls</a></li><li><a href="#worked">Worked example</a></li><li><a href="#refs">References</a></li></ol></aside><main class="prose">
+<p class="eyebrow">Designs</p>
+<h1>Stepped wedge sample size calculation</h1>
+<p class="lede">In a stepped wedge cluster randomised trial every cluster eventually
+receives the intervention, but the order in which they cross over is randomised. It is the
+design of choice when an intervention is being rolled out anyway and withholding it
+permanently is not acceptable.</p>
+
+<figure class="grid-fig"><svg viewBox="0 0 272 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Trial allocation grid, 4 sequences by 5 periods"><text class="axis-label" x="71" y="14" text-anchor="middle">T1</text><text class="axis-label" x="115" y="14" text-anchor="middle">T2</text><text class="axis-label" x="159" y="14" text-anchor="middle">T3</text><text class="axis-label" x="203" y="14" text-anchor="middle">T4</text><text class="axis-label" x="247" y="14" text-anchor="middle">T5</text><text class="axis-label" x="40" y="47" text-anchor="end">S1</text><rect class="cell-c" x="52" y="24" width="38" height="38"/><rect class="cell-i" x="96" y="24" width="38" height="38"/><rect class="cell-i" x="140" y="24" width="38" height="38"/><rect class="cell-i" x="184" y="24" width="38" height="38"/><rect class="cell-i" x="228" y="24" width="38" height="38"/><text class="axis-label" x="40" y="91" text-anchor="end">S2</text><rect class="cell-c" x="52" y="68" width="38" height="38"/><rect class="cell-c" x="96" y="68" width="38" height="38"/><rect class="cell-i" x="140" y="68" width="38" height="38"/><rect class="cell-i" x="184" y="68" width="38" height="38"/><rect class="cell-i" x="228" y="68" width="38" height="38"/><text class="axis-label" x="40" y="135" text-anchor="end">S3</text><rect class="cell-c" x="52" y="112" width="38" height="38"/><rect class="cell-c" x="96" y="112" width="38" height="38"/><rect class="cell-c" x="140" y="112" width="38" height="38"/><rect class="cell-i" x="184" y="112" width="38" height="38"/><rect class="cell-i" x="228" y="112" width="38" height="38"/><text class="axis-label" x="40" y="179" text-anchor="end">S4</text><rect class="cell-c" x="52" y="156" width="38" height="38"/><rect class="cell-c" x="96" y="156" width="38" height="38"/><rect class="cell-c" x="140" y="156" width="38" height="38"/><rect class="cell-c" x="184" y="156" width="38" height="38"/><rect class="cell-i" x="228" y="156" width="38" height="38"/></svg><div class="legend"><span><i class="k-c"></i>Control</span><span><i class="k-i"></i>Intervention</span><span><i class="k-o"></i>Not enrolled</span></div><figcaption>A four-sequence, five-period stepped wedge. Every cluster starts in the control condition and crosses over at a randomised time. The treatment effect is identified by comparing cluster-periods under intervention with cluster-periods under control, adjusted for time.</figcaption></figure>
+
+<h2 id="model">The model</h2>
+<p>The standard analysis model, following Hussey and Hughes (2007), is a linear mixed model
+with fixed effects for time and a random intercept for cluster:</p>
+<p>$$Y_{ijt} = \mu + \beta_t + X_{jt}\,\theta + \alpha_j + e_{ijt}$$</p>
+<p>where \(Y_{ijt}\) is the outcome for individual \(i\) in cluster \(j\) at period \(t\),
+\(\beta_t\) are period effects, \(X_{jt}\) is the treatment indicator, \(\theta\) is the
+treatment effect, \(\alpha_j \sim N(0,\tau^2)\) is the cluster random effect and
+\(e_{ijt} \sim N(0,\sigma^2)\) is residual error. The intracluster correlation is</p>
+<p>$$\rho = \frac{\tau^2}{\tau^2 + \sigma^2}$$</p>
+<p>The fixed period effects are essential. Because clusters cross over at different times,
+treatment status is confounded with time; a model without period effects will attribute any
+secular trend to the intervention. This also means the design carries no information about
+the treatment effect from between-cluster comparisons alone.</p>
+
+<h2 id="parameters">What you need to specify</h2>
+<div class="tbl-scroll"><table>
+<thead><tr><th>Parameter</th><th>Meaning</th><th>Typical values</th></tr></thead>
+<tbody>
+<tr><td>Sequences</td><td>Number of randomisation groups, each crossing over at a different period</td><td>4&ndash;12</td></tr>
+<tr><td>Periods</td><td>Number of measurement periods, usually sequences + 1</td><td>5&ndash;13</td></tr>
+<tr><td>Clusters per sequence</td><td>Clusters randomised to each crossover time</td><td>1&ndash;10</td></tr>
+<tr><td>Cluster-period size</td><td>Individuals measured per cluster per period</td><td>10&ndash;200</td></tr>
+<tr><td>ICC</td><td>Within-cluster correlation \(\rho\)</td><td>0.01&ndash;0.10</td></tr>
+<tr><td>CAC</td><td>Cluster autocorrelation, if using nested exchangeable</td><td>0.6&ndash;1.0</td></tr>
+</tbody></table></div>
+
+<h2 id="intuition">Why stepped wedges are more efficient than they look</h2>
+<p>A stepped wedge gets information from two sources: <em>vertical</em> comparisons between
+clusters within the same period, and <em>horizontal</em> comparisons within a cluster before
+and after crossover. The horizontal comparison is unavailable in a parallel trial and is
+what makes the stepped wedge competitive despite the confounding with time.</p>
+<p>How much the horizontal comparison is worth depends entirely on the correlation
+structure. Under exchangeable correlation, within-cluster comparisons are highly precise
+because the cluster effect cancels, and the stepped wedge can need far fewer clusters than
+a parallel trial. Under a decaying correlation, observations separated by several periods
+are much less correlated, the cluster effect no longer cancels cleanly, and the advantage
+shrinks &mdash; sometimes substantially.</p>
+<div class="note note--warn">
+<strong>Exchangeable correlation is the optimistic assumption</strong>
+<p>Assuming exchangeable correlation over a trial lasting two or three years asserts that
+observations twelve periods apart are as correlated as observations in adjacent periods.
+For most health service outcomes this is implausible. If you have any basis for it,
+specify a cluster autocorrelation below 1 or an explicit decay, and check how much power
+you lose. <a href="/methods/correlation.html">More on choosing a structure &rarr;</a></p>
+</div>
+
+<h2 id="variants">Variants the calculator supports</h2>
+<h3>Implementation periods</h3>
+<p>Real rollouts have transition time. Marking the crossover period as not enrolled removes
+those cluster-periods from the analysis, which is usually more honest than treating a
+half-implemented intervention as full strength.</p>
+<figure class="grid-fig"><svg viewBox="0 0 272 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Trial allocation grid, 4 sequences by 5 periods"><text class="axis-label" x="71" y="14" text-anchor="middle">T1</text><text class="axis-label" x="115" y="14" text-anchor="middle">T2</text><text class="axis-label" x="159" y="14" text-anchor="middle">T3</text><text class="axis-label" x="203" y="14" text-anchor="middle">T4</text><text class="axis-label" x="247" y="14" text-anchor="middle">T5</text><text class="axis-label" x="40" y="47" text-anchor="end">S1</text><rect class="cell-c" x="52" y="24" width="38" height="38"/><rect class="cell-o" x="96" y="24" width="38" height="38"/><rect class="cell-i" x="140" y="24" width="38" height="38"/><rect class="cell-i" x="184" y="24" width="38" height="38"/><rect class="cell-i" x="228" y="24" width="38" height="38"/><text class="axis-label" x="40" y="91" text-anchor="end">S2</text><rect class="cell-c" x="52" y="68" width="38" height="38"/><rect class="cell-c" x="96" y="68" width="38" height="38"/><rect class="cell-o" x="140" y="68" width="38" height="38"/><rect class="cell-i" x="184" y="68" width="38" height="38"/><rect class="cell-i" x="228" y="68" width="38" height="38"/><text class="axis-label" x="40" y="135" text-anchor="end">S3</text><rect class="cell-c" x="52" y="112" width="38" height="38"/><rect class="cell-c" x="96" y="112" width="38" height="38"/><rect class="cell-c" x="140" y="112" width="38" height="38"/><rect class="cell-o" x="184" y="112" width="38" height="38"/><rect class="cell-i" x="228" y="112" width="38" height="38"/><text class="axis-label" x="40" y="179" text-anchor="end">S4</text><rect class="cell-c" x="52" y="156" width="38" height="38"/><rect class="cell-c" x="96" y="156" width="38" height="38"/><rect class="cell-c" x="140" y="156" width="38" height="38"/><rect class="cell-c" x="184" y="156" width="38" height="38"/><rect class="cell-o" x="228" y="156" width="38" height="38"/></svg><div class="legend"><span><i class="k-c"></i>Control</span><span><i class="k-i"></i>Intervention</span><span><i class="k-o"></i>Not enrolled</span></div><figcaption>Stepped wedge with an implementation period. The transition cluster-periods are excluded from analysis rather than being assigned to either condition.</figcaption></figure>
+<h3>Incomplete and staircase designs</h3>
+<p>If measurement is expensive, you do not need every cluster measured in every period. The
+staircase design measures each cluster only in the periods immediately before and after its
+crossover, discarding cluster-periods that contribute little. It costs remarkably little
+power relative to the full design while cutting data collection dramatically &mdash; turn
+on cell weights in the calculator to see why.</p>
+<figure class="grid-fig"><svg viewBox="0 0 272 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Trial allocation grid, 4 sequences by 5 periods"><text class="axis-label" x="71" y="14" text-anchor="middle">T1</text><text class="axis-label" x="115" y="14" text-anchor="middle">T2</text><text class="axis-label" x="159" y="14" text-anchor="middle">T3</text><text class="axis-label" x="203" y="14" text-anchor="middle">T4</text><text class="axis-label" x="247" y="14" text-anchor="middle">T5</text><text class="axis-label" x="40" y="47" text-anchor="end">S1</text><rect class="cell-c" x="52" y="24" width="38" height="38"/><rect class="cell-i" x="96" y="24" width="38" height="38"/><rect class="cell-o" x="140" y="24" width="38" height="38"/><rect class="cell-o" x="184" y="24" width="38" height="38"/><rect class="cell-o" x="228" y="24" width="38" height="38"/><text class="axis-label" x="40" y="91" text-anchor="end">S2</text><rect class="cell-o" x="52" y="68" width="38" height="38"/><rect class="cell-c" x="96" y="68" width="38" height="38"/><rect class="cell-i" x="140" y="68" width="38" height="38"/><rect class="cell-o" x="184" y="68" width="38" height="38"/><rect class="cell-o" x="228" y="68" width="38" height="38"/><text class="axis-label" x="40" y="135" text-anchor="end">S3</text><rect class="cell-o" x="52" y="112" width="38" height="38"/><rect class="cell-o" x="96" y="112" width="38" height="38"/><rect class="cell-c" x="140" y="112" width="38" height="38"/><rect class="cell-i" x="184" y="112" width="38" height="38"/><rect class="cell-o" x="228" y="112" width="38" height="38"/><text class="axis-label" x="40" y="179" text-anchor="end">S4</text><rect class="cell-o" x="52" y="156" width="38" height="38"/><rect class="cell-o" x="96" y="156" width="38" height="38"/><rect class="cell-o" x="140" y="156" width="38" height="38"/><rect class="cell-c" x="184" y="156" width="38" height="38"/><rect class="cell-i" x="228" y="156" width="38" height="38"/></svg><div class="legend"><span><i class="k-c"></i>Control</span><span><i class="k-i"></i>Intervention</span><span><i class="k-o"></i>Not enrolled</span></div><figcaption>A staircase design. Only cluster-periods adjacent to crossover are measured. Compare its power against the full stepped wedge by opening both designs side by side.</figcaption></figure>
+
+<h2 id="pitfalls">Common pitfalls</h2>
+<ul>
+<li><strong>Ignoring the number of clusters.</strong> Power in a stepped wedge is driven far
+more by the number of clusters than by the number of individuals per cluster. Doubling
+cluster-period size when the ICC is 0.05 and there are 60 people per period buys almost
+nothing; adding four clusters may buy a great deal.</li>
+<li><strong>Small-cluster asymptotics.</strong> With fewer than about 20 clusters, a
+model-based <em>z</em>-test overstates power appreciably. Use Kenward&ndash;Roger or
+Satterthwaite degrees of freedom and report that you have done so.</li>
+<li><strong>Assuming a constant treatment effect.</strong> If the intervention effect grows
+over time after implementation, a model assuming an immediate constant effect is
+misspecified, and the estimated effect is a weighted average that depends on the design.
+Consider whether an exposure-time model is more appropriate.</li>
+<li><strong>Unequal sequence sizes chosen arbitrarily.</strong> Clusters are not equally
+valuable in every sequence. Turn on row weights to see the optimal distribution before
+fixing your randomisation.</li>
+</ul>
+
+<h2 id="worked">Working through an example</h2>
+<p>Suppose 24 general practices will adopt a new referral pathway over two years, in six
+sequences of four practices, with seven two-monthly periods. The outcome is continuous,
+with an assumed ICC of 0.03 and roughly 40 eligible patients per practice per period. You
+expect a difference of 0.25 standard deviations.</p>
+<p>To evaluate this: load the stepped wedge preset, set six sequences and seven periods,
+set four clusters per sequence, mean size 40, ICC 0.03, treatment effect 0.25 with the
+outcome standardised. Then set the estimator to Kenward&ndash;Roger, and plot power against
+total clusters to see how much slack you have if two practices withdraw.</p>
+<p><a href="/">Open the calculator and try it &rarr;</a></p>
+
+<h2 id="refs">References</h2>
+<ul>
+<li>Hussey MA, Hughes JP (2007). Design and analysis of stepped wedge cluster randomized
+trials. <em>Contemporary Clinical Trials</em> 28(2), 182&ndash;191.</li>
+<li>Hooper R, Teerenstra S, de Hoop E, Eldridge S (2016). Sample size calculation for
+stepped wedge and other longitudinal cluster randomised trials. <em>Statistics in
+Medicine</em> 35(26), 4718&ndash;4728.</li>
+<li>Kasza J, Hemming K, Hooper R, Matthews JNS, Forbes AB (2019). Impact of non-uniform
+correlation structure on sample size and power in multiple-period cluster randomised
+trials. <em>Statistical Methods in Medical Research</em> 28(3), 703&ndash;716.</li>
+<li>Hemming K, Taljaard M (2020). Reflection on modern methods: when is a stepped-wedge
+design a good choice? <em>International Journal of Epidemiology</em> 49(3), 1043&ndash;1052.</li>
+</ul>
+</main></div></div><footer class="footer"><div class="wrap"><div class="footer__cols">
+<div><h4>Designs</h4><ul>
+<li><a href="/designs/stepped-wedge.html">Stepped wedge</a></li>
+</ul></div>
+<div><h4>Methods</h4><ul>
+<li><a href="/methods/estimators.html">Estimators and inference</a></li>
+<li><a href="/methods/correlation.html">Correlation structures</a></li>
+<li><a href="/methods/verification.html">Verification bundle</a></li>
+</ul></div>
+<div><h4>Using the tool</h4><ul>
+<li><a href="/features.html">Features</a></li>
+<li><a href="/guide.html">Getting started</a></li>
+</ul></div>
+<div><h4>Project</h4><ul>
+<li><a href="https://github.com/samuel-watson/ClusterApp2">Source code</a></li>
+</ul></div>
+</div>
+<div class="footer__base">
+A free power and sample size calculator for cluster randomised trials. Runs entirely in your
+browser &mdash; no data leaves your machine. Built at the University of Birmingham.
+</div></div></footer></body></html>

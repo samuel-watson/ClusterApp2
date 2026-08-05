@@ -1268,6 +1268,7 @@ private:
     double stored_icc_ = 0.0;
     double stored_iac_ = 0.0;
     double stored_cac_or_lambda_ = 0.0;
+    double stored_replacement_rate_ = 1.0;
     double stored_mu0_ = 0.0;
     double stored_mu1_ = 0.0;
     double stored_mean_n_ = 1.0;
@@ -1417,7 +1418,7 @@ bool updateParameters(double icc, double iac, double cac_or_lengthscale,
         for (int i = 1; i < num_periods; i++) {
             beta.push_back(0.0);
         }
-        
+        stored_replacement_rate_ = replacement_rate;
         // Build theta vector based on family and covariance structure
         std::vector<double> theta;
         
@@ -1614,42 +1615,46 @@ Eigen::MatrixXd buildGEECovarianceMatrix() {
     int n_obs = data.rows();
     Eigen::MatrixXd V = Eigen::MatrixXd::Zero(n_obs, n_obs);
     
-    // Use totalvar = 1 (standardized scale) to match design effect formulas
-    // This is the approach used by Kasza/Hemming
-    // double totalvar = 1.0;
-    // In buildGEECovarianceMatrix:
     double mu_bar = (stored_mu0_ + stored_mu1_) / 2.0;
-    double totalvar = mu_bar * (1.0 - mu_bar);  // p̄(1-p̄)
-    // Variance components on standardized scale
-    double sig2CP = stored_icc_ * totalvar;                              // Cluster-period variance
-    double sig2E = (1.0 - stored_iac_) * (totalvar - sig2CP);           // Residual variance  
-    double sig2 = sig2E / stored_mean_n_;                                // Residual per cluster-period mean
-    double sigindiv = (stored_iac_ > 0 && stored_iac_ < 1) 
-                    ? sig2E * stored_iac_ / ((1.0 - stored_iac_) * stored_mean_n_)
-                    : 0.0;                                               // Individual autocorrelation
+    double totalvar = mu_bar * (1.0 - mu_bar);
     
-    // Handle edge cases for IAC
-    if (stored_iac_ == 0) {
-        sig2E = totalvar - sig2CP;
-        sig2 = sig2E / stored_mean_n_;
+    double sig2CP = stored_icc_ * totalvar;
+    
+    // Individual autocorrelation only applies to cohort designs
+    bool is_cohort = (sampling_structure == "closed_cohort" || 
+                      sampling_structure == "open_cohort");
+    
+    double effective_iac = is_cohort ? stored_iac_ : 0.0;
+    
+    double sig2E, sig2, sigindiv;
+    
+    if (effective_iac <= 0.0) {
+        sig2E    = totalvar - sig2CP;
+        sig2     = sig2E / stored_mean_n_;
         sigindiv = 0.0;
-    } else if (stored_iac_ >= 1.0 - 1e-10) {
-        sig2E = 0.0;
-        sig2 = 0.0;
+    } else if (effective_iac >= 1.0 - 1e-10) {
+        sig2E    = 0.0;
+        sig2     = 0.0;
         sigindiv = (totalvar - sig2CP) / stored_mean_n_;
+    } else {
+        sig2E    = (1.0 - effective_iac) * (totalvar - sig2CP);
+        sig2     = sig2E / stored_mean_n_;
+        sigindiv = sig2E * effective_iac / ((1.0 - effective_iac) * stored_mean_n_);
     }
     
-    double r = stored_cac_or_lambda_;  // CAC or decay parameter
+    double r = stored_cac_or_lambda_;
     
     EM_ASM({
         console.log("=== GEE Variance Components (Kasza/Hemming style) ===");
-        console.log("totalvar:", $0);
-        console.log("sig2CP:", $1);
-        console.log("sig2E:", $2);
-        console.log("sig2:", $3);
-        console.log("sigindiv:", $4);
-        console.log("r (CAC):", $5);
-    }, totalvar, sig2CP, sig2E, sig2, sigindiv, r);
+        console.log("sampling_structure:", UTF8ToString($0));
+        console.log("totalvar:", $1);
+        console.log("sig2CP:", $2);
+        console.log("sig2E:", $3);
+        console.log("sig2:", $4);
+        console.log("sigindiv:", $5);
+        console.log("effective_iac:", $6);
+        console.log("r (CAC):", $7);
+    }, sampling_structure.c_str(), totalvar, sig2CP, sig2E, sig2, sigindiv, effective_iac, r);
     
     // Build covariance matrix for cluster-period means
     for (int i = 0; i < n_obs; i++) {
@@ -1663,25 +1668,35 @@ Eigen::MatrixXd buildGEECovarianceMatrix() {
             double cov_ij = 0.0;
             
             if (cl_i != cl_j) {
-                // Different clusters: zero covariance
                 cov_ij = 0.0;
             } else {
-                // Same cluster
                 int lag = std::abs(t_i - t_j);
                 
+                // Individual autocorrelation contribution for this lag
+                double sigindiv_lag = 0.0;
+                if (sigindiv > 0.0) {
+                    if (sampling_structure == "closed_cohort") {
+                        // Same individuals across all periods: full autocorrelation
+                        sigindiv_lag = sigindiv;
+                    } else if (sampling_structure == "open_cohort") {
+                        // Fraction retained decays exponentially with lag
+                        sigindiv_lag = sigindiv * std::pow(1.0 - stored_replacement_rate_, lag);
+                    }
+                    // cross-sectional: sigindiv is already 0, won't reach here
+                }
+                
                 if (correlation_structure == "nested_exchangeable") {
-                    // Constant decay: Vi = sigindiv + diag(sig2 + (1-r)*sig2CP) + r*sig2CP
                     if (lag == 0) {
-                        cov_ij = sigindiv + sig2 + sig2CP;
+                        cov_ij = sigindiv_lag + sig2 + sig2CP;
                     } else {
-                        cov_ij = sigindiv + r * sig2CP;
+                        cov_ij = sigindiv_lag + r * sig2CP;
                     }
                 } else {
-                    // Exponential decay: Vi = sigindiv + diag(sig2) + sig2CP * r^lag
+                    // Exponential decay
                     if (lag == 0) {
-                        cov_ij = sigindiv + sig2 + sig2CP;
+                        cov_ij = sigindiv_lag + sig2 + sig2CP;
                     } else {
-                        cov_ij = sigindiv + sig2CP * std::pow(r, lag);
+                        cov_ij = sigindiv_lag + sig2CP * std::pow(r, lag);
                     }
                 }
             }
@@ -1691,7 +1706,6 @@ Eigen::MatrixXd buildGEECovarianceMatrix() {
         }
     }
     
-    // Debug: print sample of V
     EM_ASM({
         console.log("=== V matrix (first cluster) ===");
         console.log("V[0,0]:", $0, "V[0,1]:", $1);

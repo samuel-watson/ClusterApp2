@@ -3,36 +3,85 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Cluster Trial Designer</title>
 
-    <!-- Ajax-->
+    <title>Cluster randomised trial power and sample size calculator | clustertrial.app</title>
+    <meta name="description" content="Free browser-based power and sample size calculator for cluster randomised trials. Design stepped wedge, parallel, cross-over and staircase trials on a grid, compare GLMM and GEE estimators with small-sample corrections, and export an auditable verification bundle." />
+    <link rel="canonical" href="https://clustertrial.app/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://clustertrial.app/" />
+    <meta property="og:title" content="Cluster randomised trial power and sample size calculator" />
+    <meta property="og:description" content="Design stepped wedge, parallel and cross-over cluster trials on a grid. Ten estimators, optimal allocation weights, and exportable verification bundles." />
+    <meta name="twitter:card" content="summary_large_image" />
+
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/landing.css">
+
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      "name": "clustertrial.app",
+      "alternateName": "Cluster Trial Designer",
+      "applicationCategory": "https://schema.org/EducationalApplication",
+      "applicationSubCategory": "Statistical software",
+      "operatingSystem": "Any (web browser)",
+      "url": "https://clustertrial.app/",
+      "description": "Power and sample size calculator for cluster randomised trials, including stepped wedge, parallel, cross-over and staircase designs. Supports GLMM and GEE estimators with Satterthwaite and Kenward-Roger small-sample corrections, four correlation structures, cohort and cross-sectional sampling, optimal allocation weights, and exportable verification bundles.",
+      "offers": { "@type": "Offer", "price": "0", "priceCurrency": "GBP" },
+      "featureList": [
+        "Graphical trial design on a sequence-by-period grid",
+        "Stepped wedge, parallel, parallel with baseline, cross-over, staircase designs",
+        "GLMM, GEE, Satterthwaite, Kenward-Roger and design effect estimators",
+        "Exchangeable, nested exchangeable, exponential decay and exponential function correlation",
+        "Cross-sectional, closed cohort and open cohort sampling",
+        "Optimal allocation weights for cells and sequences",
+        "Side-by-side comparison of up to three designs",
+        "Exportable design diagrams and power plots",
+        "Exportable verification bundle with matrices and R reproduction script",
+        "Warnings for small-sample optimism and infeasible correlation parameters"
+      ],
+      "author": {
+        "@type": "Person",
+        "name": "Samuel Watson",
+        "affiliation": { "@type": "Organization", "name": "University of Birmingham" }
+      }
+    }
+    </script>
+
+    <!-- JSZip (verification bundle export) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 
     <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script> 
-    
-    <!-- React 18 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- React 18 
     <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
-    
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>-->
+
     <!-- Babel for JSX transformation -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <!--<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script> -->
+
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
     <script>
-  // Log visitor
-  fetch('https://ipapi.co/json/')
-    .then(r => r.json())
-    .then(data => {
-      fetch('log-visit.php', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      }).catch(() => {});
-    })
-    .catch(() => {});
-</script>
+      // Log visitor
+      fetch('https://ipapi.co/json/')
+        .then(r => r.json())
+        .then(data => {
+          fetch('log-visit.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data)
+          }).catch(() => {});
+        })
+        .catch(() => {});
+    </script>
 
     <style>
       #loading-overlay {
@@ -75,6 +124,9 @@
         font-size: 12px;
         margin-top: 12px;
       }
+      @media (prefers-reduced-motion: reduce) {
+        .spinner { animation-duration: 3s; }
+      }
     </style>
   </head>
   <body>
@@ -87,44 +139,127 @@
         <pre id="error-stack"></pre>
       </div>
     </div>
-    
+
+    <!-- Static navigation: present in the initial HTML, so crawlers can follow it -->
+    <nav class="ct-static ct-nav">
+      <a class="ct-nav__mark" href="/">clustertrial.app</a>
+      <div class="ct-nav__links">
+        <a href="/features.html">Features</a>
+        <a href="/guide.html">Getting started</a>
+        <a href="/designs/stepped-wedge.html">Designs</a>
+        <a href="/methods/estimators.html">Methods</a>
+        <a href="/methods/verification.html">Verification</a>
+      </div>
+    </nav>
+
     <div id="root"></div>
-    
+
+    <!-- Static content band. Sits below the calculator, off the initial view,
+         but present in the served HTML for indexing. -->
+    <section class="ct-static ct-band">
+      <div class="ct-band__inner">
+        <h2>A power and sample size calculator for cluster randomised trials</h2>
+        <p>
+          clustertrial.app calculates statistical power, sample size, standard errors and
+          minimum detectable effects for cluster randomised trials, including stepped wedge,
+          parallel, parallel with baseline, cross-over and staircase designs. Rather than
+          selecting a design from a fixed list, you draw the allocation schedule directly on
+          a grid of randomised sequences by time periods, so incomplete designs,
+          implementation periods and irregular rollouts can all be costed accurately.
+        </p>
+        <p>
+          Power depends on how a trial will be analysed, so the calculator supports ten
+          approaches to inference: model-based mixed model inference with normal or
+          <em>t</em> reference distributions, Satterthwaite and Kenward&ndash;Roger
+          small-sample corrections, generalised estimating equations with independence or
+          exchangeable working correlation and robust sandwich variances, and classical
+          design effect calculations for comparison. Continuous, binary and count outcomes
+          are supported, with conditional and marginal estimands distinguished explicitly.
+        </p>
+        <ul class="ct-plain">
+          <li>Four correlation structures: exchangeable, nested exchangeable with a cluster autocorrelation, exponential decay, and exponential function with a lengthscale.</li>
+          <li>Cross-sectional, closed cohort and open cohort sampling, with individual autocorrelation and a replacement rate.</li>
+          <li>Optimal allocation weights for cells and sequences, rendered directly onto the design grid.</li>
+          <li>Up to three designs open at once for side-by-side comparison of power, degrees of freedom, standard error and minimum detectable effect.</li>
+          <li>Power curves and power surfaces exportable as PNG or SVG, and design diagrams exportable as PNG.</li>
+          <li>Sessions saved to and restored from JSON, so a calculation can be revisited when assumptions change.</li>
+          <li>Warnings when the selected estimator is materially more optimistic than the alternatives, and when specified correlation parameters cannot be realised in the fitted model.</li>
+          <li>A verification bundle containing every matrix in the computation plus an R script that independently reproduces the standard error.</li>
+        </ul>
+        <p>
+          Everything runs locally in your browser through a WebAssembly build of the
+          statistical engine. No design, parameter or result is transmitted anywhere, and
+          there is nothing to install and no account to create.
+        </p>
+
+        <ul class="ct-cards">
+          <li>
+            <h3><a href="/guide.html">Getting started</a></h3>
+            <p>A step-by-step walkthrough from an empty grid to an exported bundle.</p>
+          </li>
+          <li>
+            <h3><a href="/designs/stepped-wedge.html">Stepped wedge sample size</a></h3>
+            <p>The model, the parameters that matter, and a worked example.</p>
+          </li>
+          <li>
+            <h3><a href="/methods/estimators.html">Choosing an estimator</a></h3>
+            <p>What each method assumes, and when it will flatter your design.</p>
+          </li>
+          <li>
+            <h3><a href="/methods/correlation.html">Correlation structures</a></h3>
+            <p>ICC, CAC and IAC, and why binary outcomes constrain what is achievable.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <footer class="ct-static ct-foot">
+      <div class="ct-foot__inner">
+        Free to use, no registration. Runs entirely in your browser.
+        &nbsp;&middot;&nbsp; <a href="/features.html">Features</a>
+        &nbsp;&middot;&nbsp; <a href="/guide.html">Getting started</a>
+        &nbsp;&middot;&nbsp; <a href="/methods/verification.html">Verification bundle</a>
+        &nbsp;&middot;&nbsp; <a href="https://github.com/samuel-watson/ClusterApp2">Source code</a>
+        &nbsp;&middot;&nbsp; Built at the University of Birmingham.
+      </div>
+    </footer>
+
     <!-- WASM Module -->
     <script src="glmm_wasm.js"></script>
-    
+
     <!-- Shared utilities exposed to global scope -->
     <script src="wasmLoader.global.js"></script>
-    <script src="reportGenerator.js"></script> 
-    <!-- Main application (JSX transformed by Babel) -->
-    <script type="text/babel" src="App.jsx" async></script>
-    
+    <script src="reportGenerator.js"></script>
+    <!-- Main application (JSX transformed by Babel) 
+    <script type="text/babel" src="App.jsx" async></script>-->
+    <script src="app.js?v=2" defer></script>
+
     <script>
       // Error handling
       window.onerror = function(msg, url, line, col, error) {
         showError(msg, error?.stack);
         return false;
       };
-      
+
       window.addEventListener('unhandledrejection', function(event) {
         showError(event.reason?.message || 'Promise rejected', event.reason?.stack);
       });
-      
+
       function showError(message, stack) {
         document.getElementById('loading-status').textContent = 'Error occurred';
         document.getElementById('error-message').textContent = message;
         document.getElementById('error-stack').textContent = stack || '';
         document.getElementById('error-display').classList.add('show');
       }
-      
+
       function updateLoadingStatus(status) {
         document.getElementById('loading-status').textContent = status;
       }
-      
+
       function hideLoading() {
         document.getElementById('loading-overlay').classList.add('hidden');
       }
-      
+
       // Expose helpers to app
       window.AppHelpers = {
         updateLoadingStatus,

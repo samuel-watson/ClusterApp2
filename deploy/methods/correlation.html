@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Correlation structures and sampling in cluster randomised trials</title>
+<meta name="description" content="Exchangeable, nested exchangeable, exponential decay and exponential function correlation structures; cross-sectional, closed and open cohort sampling; ICC, CAC and IAC; and why binary outcomes constrain achievable correlations.">
+<link rel="canonical" href="https://clustertrial.app/methods/correlation.html">
+<meta property="og:title" content="Correlation structures and sampling in cluster randomised trials">
+<meta property="og:description" content="Exchangeable, nested exchangeable, exponential decay and exponential function correlation structures; cross-sectional, closed and open cohort sampling; ICC, CAC and IAC; and why binary outcomes constrain achievable correlations.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://clustertrial.app/methods/correlation.html">
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/site.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"
+  onload="renderMathInElement(document.body,{delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}]});"></script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"TechArticle","headline":"Correlation structures and sampling in cluster randomised trials",
+"description":"Exchangeable, nested exchangeable, exponential decay and exponential function correlation structures; cross-sectional, closed and open cohort sampling; ICC, CAC and IAC; and why binary outcomes constrain achievable correlations.","url":"https://clustertrial.app/methods/correlation.html",
+"isPartOf":{"@type":"WebSite","name":"clustertrial.app","url":"https://clustertrial.app"},
+"about":{"@type":"Thing","name":"Cluster randomised trial sample size calculation"}}
+</script>
+</head>
+<body>
+<nav class="nav"><a class="nav__mark" href="/">clustertrial.app</a><div class="nav__links"><a href="/features.html">Features</a><a href="/guide.html">Getting started</a><a href="/designs/stepped-wedge.html">Designs</a><a href="/methods/estimators.html">Methods</a></div><a class="nav__cta" href="/">Open the calculator</a></nav>
+<div class="wrap">
+<div class="page page--railed"><aside class="rail"><p class="rail__title">On this page</p><ol><li><a href="#icc">The ICC</a></li><li><a href="#structures">Four structures</a></li><li><a href="#sampling">Sampling</a></li><li><a href="#binary">Binary outcomes</a></li><li><a href="#sources">Finding estimates</a></li></ol></aside><main class="prose">
+<p class="eyebrow">Methods</p>
+<h1>Correlation structures and sampling</h1>
+<p class="lede">In a longitudinal cluster trial, the assumption you make about how
+correlation decays over time can change the required sample size by a factor of two. It
+deserves more thought than it usually gets.</p>
+
+<h2 id="icc">The intracluster correlation</h2>
+<p>For a continuous outcome with a cluster random effect of variance \(\tau^2\) and residual
+variance \(\sigma^2\), the correlation between any two individuals in the same cluster is</p>
+<p>$$\rho = \frac{\tau^2}{\tau^2 + \sigma^2}$$</p>
+<p>This single number is what makes cluster trials less efficient than individually
+randomised ones: observations within a cluster carry partly redundant information. In a
+single-period parallel trial it is the only correlation parameter you need. As soon as there
+is more than one period, it is not enough &mdash; you must also say how correlation behaves
+<em>across</em> periods.</p>
+
+<h2 id="structures">The four structures</h2>
+
+<h3>Exchangeable</h3>
+<p>$$\operatorname{Cor}(Y_{ijt}, Y_{i'jt'}) = \rho \quad \text{for all } t, t'$$</p>
+<p>Correlation is the same regardless of separation in time. The cluster effect is a single
+constant shift that persists undiminished for the whole trial. Simple, and the assumption
+underlying the original Hussey and Hughes calculations, but strong: it implies a practice
+measured in month 1 and month 36 is as similar to itself as it is between consecutive
+months.</p>
+
+<h3>Nested exchangeable</h3>
+<p>$$\operatorname{Cor} = \begin{cases}\rho & t = t' \\ \rho \times \text{CAC} & t \neq t'\end{cases}$$</p>
+<p>Adds a cluster autocorrelation (CAC) that discounts all between-period correlation by a
+constant factor. Within-period correlation stays at \(\rho\); between-period correlation
+drops to \(\rho \times \text{CAC}\) regardless of how far apart the periods are. A CAC of 1
+recovers exchangeability. Values of 0.7&ndash;0.95 are commonly reported.</p>
+<p>This is a good default when you believe correlation decays but have no basis for
+specifying a rate. It is implemented as a second random effect nested within cluster-period.</p>
+
+<h3>Exponential decay</h3>
+<p>$$\operatorname{Cor}(Y_{ijt}, Y_{i'jt'}) = \rho\,\lambda^{|t - t'|}$$</p>
+<p>Correlation decays geometrically with the number of periods separating the observations,
+at a rate governed by \(\lambda \in (0,1)\). More realistic for long trials where cluster
+composition, staffing, and case mix all drift. Sometimes called a discrete-time AR(1)
+structure for the cluster effect.</p>
+
+<h3>Exponential function</h3>
+<p>$$\operatorname{Cor}(Y_{ijt}, Y_{i'jt'}) = \rho \exp\!\left(-\frac{|t - t'|}{\ell}\right)$$</p>
+<p>The same idea parameterised by a lengthscale \(\ell\) in period units, which is easier to
+elicit: a lengthscale of 4 means correlation falls to about 37% of its within-period value
+after four periods. Useful when periods are irregularly spaced or when you want to reason
+about decay in real time rather than period counts.</p>
+
+<div class="note note--warn">
+<strong>The choice is not neutral</strong>
+<p>Structures are ordered from most to least favourable to longitudinal designs. A stepped
+wedge that looks comfortably powered under exchangeable correlation can fall well below 80%
+under exponential decay with a plausible rate. Because the assumption is rarely testable in
+advance, the defensible approach is to compute power under more than one structure and
+report the least favourable. The calculator lets you hold two designs side by side that
+differ only in this assumption.</p>
+</div>
+
+<h2 id="sampling">Sampling structure</h2>
+<p>Who is measured in each period changes the correlation structure independently of the
+cluster effect.</p>
+<div class="tbl-scroll"><table>
+<thead><tr><th>Structure</th><th>Meaning</th><th>Extra parameter</th></tr></thead>
+<tbody>
+<tr><td>Cross-sectional</td><td>Different individuals measured each period</td><td>&mdash;</td></tr>
+<tr><td>Closed cohort</td><td>The same individuals measured every period</td><td>IAC</td></tr>
+<tr><td>Open cohort</td><td>A cohort with turnover between periods</td><td>IAC, replacement rate</td></tr>
+</tbody></table></div>
+<p>The <strong>individual autocorrelation</strong> (IAC) is the correlation between repeated
+measurements on the same person, over and above the correlation induced by shared cluster
+membership. Cohort designs are usually more efficient than cross-sectional ones, because
+each individual acts partly as their own control &mdash; but this depends on the IAC being
+substantial, and it comes at the cost of attrition risk.</p>
+<p>The <strong>replacement rate</strong> in an open cohort is the proportion of individuals
+replaced between consecutive periods. Zero recovers a closed cohort; one recovers a
+cross-sectional design. Intermediate values interpolate, which is usually a better
+description of a real service population than either extreme.</p>
+
+<h2 id="binary">Why binary outcomes make this hard</h2>
+<p>For a continuous outcome, ICC and IAC map directly onto variance components. For binary
+and count outcomes they do not, and this is a genuine difficulty rather than an
+implementation detail.</p>
+<p>You specify correlations on the <em>observed</em> scale, because that is the scale on
+which they are reported and understood. But the model is fitted on the <em>link</em> scale,
+with random effects entering a logit or log linear predictor. Translating between the two
+requires solving for the random effect variances that induce the requested observed-scale
+correlations, given the baseline prevalence. That solution does not always exist, and when
+it does it is not always sensible.</p>
+<p>The reason is that a binary outcome&rsquo;s variance is bounded by its mean. To achieve a
+high correlation between repeated binary measurements on the same individual, the model
+needs a large individual-level random effect variance &mdash; and a large variance on the
+logit scale pushes individual response probabilities toward 0 and 1. In the limit, the model
+says every individual either always responds or never does, and the observed prevalence
+arises entirely from the mix of types in the population rather than from any within-person
+uncertainty. That is a coherent model, but it is rarely what anyone intends, and power under
+it can be very different from power under a moderate-variance model.</p>
+
+<h3>What the warnings mean</h3>
+<div class="tbl-scroll"><table>
+<thead><tr><th>Level</th><th>What the solver found</th><th>What to do</th></tr></thead>
+<tbody>
+<tr><td>Moderate</td><td>A solution exists but requires high random effect variance</td>
+<td>Usable. Compare conditional and marginal estimators &mdash; they may diverge noticeably.</td></tr>
+<tr><td>Severe</td><td>A solution exists but requires extreme variance, implying near-deterministic individuals</td>
+<td>Reconsider the parameters. Lower the IAC or raise the ICC toward a more plausible combination.</td></tr>
+<tr><td>Failure</td><td>No valid parameters found</td>
+<td>The requested combination is not achievable in this model. Power output is unreliable and should not be used.</td></tr>
+</tbody></table></div>
+<p>These warnings appear only for non-continuous outcomes with a cohort sampling structure
+and a non-zero IAC, which is where the problem arises.</p>
+
+<h2 id="sources">Where to get correlation estimates</h2>
+<ul>
+<li>Published ICC databases for primary care and hospital outcomes, which give plausible
+ranges by outcome type and cluster definition.</li>
+<li>Routine data for the same outcome in the same setting, which is usually the best
+available source and often already accessible.</li>
+<li>Previous trials in the same clusters, if any &mdash; but check the cluster definition
+matches, since ICCs at practice level and at ward level are not interchangeable.</li>
+</ul>
+<p>Whatever the source, treat the estimate as uncertain and plot power across a range. An
+ICC point estimate from a study of thirty clusters has a wide confidence interval, and
+propagating that uncertainty into the sample size is more honest than picking the midpoint.</p>
+</main></div></div><footer class="footer"><div class="wrap"><div class="footer__cols">
+<div><h4>Designs</h4><ul>
+<li><a href="/designs/stepped-wedge.html">Stepped wedge</a></li>
+</ul></div>
+<div><h4>Methods</h4><ul>
+<li><a href="/methods/estimators.html">Estimators and inference</a></li>
+<li><a href="/methods/correlation.html">Correlation structures</a></li>
+<li><a href="/methods/verification.html">Verification bundle</a></li>
+</ul></div>
+<div><h4>Using the tool</h4><ul>
+<li><a href="/features.html">Features</a></li>
+<li><a href="/guide.html">Getting started</a></li>
+</ul></div>
+<div><h4>Project</h4><ul>
+<li><a href="https://github.com/samuel-watson/ClusterApp2">Source code</a></li>
+</ul></div>
+</div>
+<div class="footer__base">
+A free power and sample size calculator for cluster randomised trials. Runs entirely in your
+browser &mdash; no data leaves your machine. Built at the University of Birmingham.
+</div></div></footer></body></html>
